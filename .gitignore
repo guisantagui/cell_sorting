@@ -1,0 +1,10 @@
+data
+results
+*.pdf
+*.rtf
+test.md
+notes_ordering.md
+notes_on_databases_for_validation.md
+*.tex
+.DS_Store
+test_data
