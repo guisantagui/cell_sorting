@@ -6,6 +6,8 @@ library(parallel)
 library(graph)
 library(RBGL)
 library(ggplot2)
+library(RANN)
+library(irlba)
 
 data_dir <- "/Users/guillem.santamaria/Documents/postdoc/comput/neurodeg_aging_project/data/counts_data/GSE254569/counts/extracted_data/"
 mdat_file <- "/Users/guillem.santamaria/Documents/postdoc/comput/neurodeg_aging_project/data/counts_data/GSE254569/metadata/metadata/metadata.csv"
@@ -130,6 +132,7 @@ create_cellsort_obj <- function(seur,
                                 target_cell = NULL,
                                 assay = "RNA",
                                 layer = "counts",
+                                dim_red = NULL,
                                 n_var_features = NULL,
                                 shiftlog = T){
         #assay <- "RNA"
@@ -734,8 +737,10 @@ assign_cell_to_edge <- function(cell_mat, centroid_mat, edges,
                 cell_edge <- do.call(rbind, cell_edge)
         }
         end_time <- Sys.time()
+        elapsed <- round(as.numeric(start - end, units = "mins"),
+                         digits = 3)
         message(sprintf("Cells have been assigned to edges. %s mins elapsed.",
-                        round(end_time - start_time, digits = 3)))
+                        elapsed))
         
         return(cell_edge)
 }
@@ -815,8 +820,10 @@ get_cell_graph <- function(edges,
         w <- 1 / (1 + as.vector(nn$nn.dist))
         names(w) <- paste(cell_edges[,1], cell_edges[,2], sep = "_")
         end_time <- Sys.time()
+        elapsed <- round(as.numeric(start - end, units = "mins"),
+                         digits = 3)
         message(sprintf("KNN graph is done. %s mins elapsed.",
-                        round(end_time - start_time, digits = 3)))
+                        elapsed, digits = 3))
         
         # Prune edges that do no satisfy backbone graph progression
         # based on edge assignments.
@@ -858,8 +865,10 @@ get_cell_graph <- function(edges,
         V(tree)$age <- cell_metdat$age[match(names(V(tree)),
                                              rownames(cell_metdat))]
         end_time <- Sys.time()
+        elapsed <- round(as.numeric(start - end, units = "mins"),
+                         digits = 3)
         message(sprintf("Optimal graph finished. %s mins elapsed.",
-                        round(end_time - start_time, digits = 3)))
+                        elapsed, digits = 3))
         return(tree)
 }
 
@@ -984,8 +993,10 @@ build_cell_graph <- function(cellsort,
                                  algo = algo)
         cellsort$cell_graph <- cell_g
         end_time <- Sys.time()
+        elapsed <- round(as.numeric(start - end, units = "mins"),
+                         digits = 3)
         message(sprintf("Total time: %s mins.",
-                        round(end_time - start_time, digits = 3)))
+                        elapsed))
         return(cellsort)
 }
 
@@ -1118,7 +1129,8 @@ cellsort <- build_cell_graph(cellsort = cellsort,
                              centroid_ids_in = "donor",
                              k = 20,
                              algo = "edmonds",
-                             parallelize = T)
+                             parallelize = T,
+                             cores = 8)
 
 plot_graph(cellsort$cell_graph,
            color = "age",
