@@ -629,6 +629,82 @@ assign_cell_to_edge <- function(cell_mat, centroid_mat, edges){
         return(cell_edge)
 }
 
+# Multi-core version
+get_cell_to_edges_dist <- function(cell, centroids_A, centroids_B) {
+        v <- centroids_B - centroids_A
+        u <- cell - centroids_A
+        v2 <- colSums(v^2)
+        t <- colSums(u * v) / v2
+        t <- pmin(pmax(t, 0), 1)
+        distances <- sqrt(colSums((u - v * matrix(t, nrow = nrow(v), ncol = length(t), byrow = TRUE))^2))
+        return(data.frame(t = t, distance = distances))
+}
+assign_cell_to_edge <- function(cell_mat, centroid_mat, edges,
+                                parallelize = F){
+        cores <- max(1, detectCores() - 1)
+        #cores <- detectCores() - 1
+        #if (cores < 1){
+        #        cores <- 1
+        #}
+        message("Assigning cells to best edge in backbone graph...")
+        start_time <- Sys.time()
+        
+        
+        
+        centroids_A <- centroid_mat[, edges[, 1]]
+        centroids_B <- centroid_mat[, edges[, 2]]
+        
+        cell_fun <- function(i) {
+                cell_name <- colnames(cell_mat)[i]
+                cell_vec <- cell_mat[, i]
+                dists <- get_cell_to_edges_dist(cell_vec, centroids_A, centroids_B)
+                j <- which.min(dists$distance)
+                return(data.frame(from = edges[j, 1],
+                                  to = edges[j, 2],
+                                  dist = dists$distance[j],
+                                  cell = cell_name))
+        }
+        if (!parallelize){
+                cell_edge <- data.frame(matrix(nrow = ncol(cell_mat), ncol = 4,
+                                               dimnames = list(NULL,
+                                                               c("from",
+                                                                 "to",
+                                                                 "dist",
+                                                                 "cell"))))
+                pb <- txtProgressBar(min = 0, max = ncol(cell_mat), style = 3)
+                for (i in 1:ncol(cell_mat)){
+                        setTxtProgressBar(pb, i)
+                        cell_name <- colnames(cell_mat)[i]
+                        cell_vec <- cell_mat[, i]
+                        dists <- get_cell_to_edges_dist(cell_vec,
+                                                        centroids_A,
+                                                        centroids_B)
+                        tobind <- matrix(edges[which.min(dists$distance), ],
+                                         nrow = 1,
+                                         dimnames = list(cell_name,
+                                                         c("from", "to")))
+                        tobind <- data.frame(tobind)
+                        tobind$dist <- min(dists$distance)
+                        tobind$cell <- cell_name
+                        cell_edge$from[i] <- tobind$from
+                        cell_edge$to[i] <- tobind$to
+                        cell_edge$dist[i] <- tobind$dist
+                        cell_edge$cell[i] <- tobind$cell
+                }
+                close(pb)
+        }else{
+                cell_edge <- mclapply(seq_len(ncol(cell_mat)),
+                                      cell_fun,
+                                      mc.cores = cores)
+                cell_edge <- do.call(rbind, cell_edge)
+        }
+        end_time <- Sys.time()
+        message(sprintf("Cells have been assigned to edges. %s mins elapsed.",
+                        round(end_time - start_time, digits = 3)))
+        
+        return(cell_edge)
+}
+
 # Given a matrix of cell-to-cell edges (cell_edges), the cell-backbone edge
 # assignment matrix  (cell_edge_mat), the edges of the backbone graph (edges)
 # and an initial edge (in_edge), recursively prunes the cell_edges that don't

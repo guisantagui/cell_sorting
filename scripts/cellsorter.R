@@ -490,6 +490,7 @@ plot_graph <- function(g, node_info = NULL, color = NULL,
                        graph_layout = "fr",
                        root = NULL,
                        coords){
+        #g <- cellsort_toy$cell_graph
         if (is.null(node_info)){
                 attribs <- vertex_attr_names(g)
                 node_info <- do.call(cbind.data.frame,
@@ -671,8 +672,8 @@ get_cell_to_edges_dist <- function(cell, centroids_A, centroids_B) {
 # get_cell_to_edge_dist to comput the distances of each cell to each edge
 # and assigns the cell to the edge with the minimum distance.
 assign_cell_to_edge <- function(cell_mat, centroid_mat, edges,
-                                parallelize = F){
-        cores <- max(1, detectCores() - 1)
+                                parallelize = F,
+                                cores = NULL){
         #cores <- detectCores() - 1
         #if (cores < 1){
         #        cores <- 1
@@ -724,6 +725,9 @@ assign_cell_to_edge <- function(cell_mat, centroid_mat, edges,
                 }
                 close(pb)
         }else{
+                if (is.null(cores)){
+                        cores <- max(1, detectCores() - 1)
+                }
                 cell_edge <- mclapply(seq_len(ncol(cell_mat)),
                                 cell_fun,
                                 mc.cores = cores)
@@ -736,46 +740,6 @@ assign_cell_to_edge <- function(cell_mat, centroid_mat, edges,
         return(cell_edge)
 }
 
-assign_cell_to_edge <- function(cell_mat, centroid_mat, edges,
-                                parallelize = F){
-        cores <- detectCores() - 1
-        if (cores < 1){
-                cores <- 1
-        }
-        message("Assigning cells to best edge in backbone graph...")
-        cell_names <- colnames(cell_mat)
-        # Parallel computation over cells
-        cell_edge_list <- mclapply(1:ncol(cell_mat), function(i) {
-                
-                cell_name <- cell_names[i]
-                cell_vec <- cell_mat[, i]
-                
-                # Compute distances for all edges
-                dists <- lapply(1:nrow(edges), function(j) {
-                        x <- edges[j, ]
-                        get_cell_to_edge_dist(cell_vec, centroid_mat[, x[1]], centroid_mat[, x[2]])
-                })
-                
-                dists <- do.call(rbind, dists)
-                
-                # Find edge with minimum distance
-                min_idx <- which.min(dists$distance)
-                
-                data.frame(
-                        from = edges[min_idx, 1],
-                        to = edges[min_idx, 2],
-                        dist = dists$distance[min_idx],
-                        cell = cell_name,
-                        row.names = cell_name
-                )
-                
-        }, mc.cores = cores)
-        
-        # Combine results into a single data frame
-        cell_edge <- do.call(rbind, cell_edge_list)
-        
-        return(cell_edge)
-}
 
 # Given a matrix of cell-to-cell edges (cell_edges), the cell-backbone edge
 # assignment matrix  (cell_edge_mat), the edges of the backbone graph (edges)
@@ -840,15 +804,19 @@ get_cell_graph <- function(edges,
         #cell_root <- youngest_cell
         
         # Build KNN graph of all the cells
-        message("Compute cell KNN graph...")
-        nn <- FNN::get.knn(t(cell_mat), k = k)
+        message("Computing cell KNN graph...")
+        start_time <- Sys.time()
+        nn <- nn2(t(cell_mat), k = k)
+        #nn <- FNN::get.knn(t(cell_mat), k = k)
         n <- nrow(nn$nn.dist)
         cell_edges <- cbind(colnames(cell_mat)[rep(1:n, k)],
-                            colnames(cell_mat)[as.vector(nn$nn.index)])
+                            colnames(cell_mat)[as.vector(nn$nn.idx)])
         # Obtain edge weights
         w <- 1 / (1 + as.vector(nn$nn.dist))
         names(w) <- paste(cell_edges[,1], cell_edges[,2], sep = "_")
-        
+        end_time <- Sys.time()
+        message(sprintf("KNN graph is done. %s mins elapsed.",
+                        round(end_time - start_time, digits = 3)))
         
         # Prune edges that do no satisfy backbone graph progression
         # based on edge assignments.
@@ -857,8 +825,10 @@ get_cell_graph <- function(edges,
         cell_edges <- prune_cell_edges(cell_edges, cell_edge_mat,
                                        edges, in_edge)
         w <- w[names(w) %in% paste(cell_edges[,1], cell_edges[,2], sep = "_")]
-        cell_g <- graph_from_edgelist(cell_edges, directed = T)
+        #cell_g <- graph_from_edgelist(cell_edges, directed = T)
         E(cell_g)$weight <- w
+        message(sprintf("Computing %s optimal graph...", algo))
+        start_time <- Sys.time()
         if (algo == "mst"){
                 cell_g <- graph_from_edgelist(cell_edges, directed = F)
                 E(cell_g)$weight <- w
@@ -886,31 +856,36 @@ get_cell_graph <- function(edges,
                                           names(w))]
         }
         V(tree)$age <- cell_metdat$age[match(names(V(tree)),
-                                             cell_metdat$cell_name)]
+                                             rownames(cell_metdat))]
+        end_time <- Sys.time()
+        message(sprintf("Optimal graph finished. %s mins elapsed.",
+                        round(end_time - start_time, digits = 3)))
         return(tree)
 }
 
 # 
 build_cell_graph <- function(cellsort,
                              centroid_ids_in,
-                             cell_mat,
-                             centroid_mat,
-                             backbone_graph,
-                             cell_metdat,
                              k = 100,
-                             algo = "edmonds"){
-        cellsort <- cellsort_toy
+                             algo = "edmonds",
+                             parallelize = T,
+                             cores = NULL){
         
+        #cellsort <- cellsort_toy
+        #centroid_ids_in <- "donor"
+        #centroid_ids_in <- "orig.ident"
+        #parallelize <- T
+        #k <- 100
+        #algo <- "edmonds"
+        
+        start_time <- Sys.time()
         cell_mat <- cellsort$cell_expr
         backbone_graph <- cellsort$centroid_graph
         centroid_mat <- cellsort$cent_expr_stand
         cell_metdat <- cellsort$cell_metadata
-        centroid_ids_in <- "donor"
-        centroid_ids_in <- "orig.ident"
+        
         #backbone_graph <- g_pruned
-        #centroid_mat <- X
-        k <- 100
-        algo <- "edmonds"
+        
         
         # Find leaves and root by finding endpoints of graph
         leaves <- names(which(igraph::degree(backbone_graph,
@@ -947,11 +922,13 @@ build_cell_graph <- function(cellsort,
         #sd_centroids <- apply(centroid_mat, 1, sd)
         #centroid_mat <- (centroid_mat - mean_centroids)/sd_centroids
         message("Scaling cell expression...")
-        cell_expr_stand <- t(cellsort$cell_expr)
-        cell_expr_stand <- sweep(cell_expr_stand, 2, cellsort$means, "-")
-        cell_expr_stand <- sweep(cell_expr_stand, 2, cellsort$sds, "/")
-        cellsort$cell_expr_stand <- t(cell_expr_stand)
-        
+        cell_expr_stand <- cellsort$cell_expr
+        #cell_expr_stand <- t(cellsort$cell_expr)
+        #cell_expr_stand <- sweep(cell_expr_stand, 2, cellsort$means, "-")
+        #cell_expr_stand <- sweep(cell_expr_stand, 2, cellsort$sds, "/")
+        #cellsort$cell_expr_stand <- t(cell_expr_stand)
+        cell_expr_stand <- (cell_mat - cellsort$means)/cellsort$sds
+        cellsort$cell_expr_stand <- cell_expr_stand
         
         # Find the youngest cell by identifying the direction of change
         # across the trunk, and identifying the cell that goes most in the 
@@ -990,7 +967,9 @@ build_cell_graph <- function(cellsort,
         # (perpendicular, or shortest path, from the cell to the edge). Does
         # this for each cell, and every edge, and then assigns the cell to the
         # centroid with the minimum distance
-        cell_edge <- assign_cell_to_edge(cell_mat, centroid_mat, edges)
+        cell_edge <- assign_cell_to_edge(cellsort$cell_expr_stand, centroid_mat, edges,
+                                         parallelize = parallelize,
+                                         cores = cores)
         
         # Prune the cell edges that don't respect the connectivity imposed by
         # the backbone graph.
@@ -1003,26 +982,13 @@ build_cell_graph <- function(cellsort,
                                  cell_metdat = cell_metdat,
                                  cell_root = youngest_cell,
                                  algo = algo)
-        return(cell_g)
+        cellsort$cell_graph <- cell_g
+        end_time <- Sys.time()
+        message(sprintf("Total time: %s mins.",
+                        round(end_time - start_time, digits = 3)))
+        return(cellsort)
 }
 
-
-seur <- Seurat::Read10X(data.dir = data_dir)
-seur <- CreateSeuratObject(counts = seur)
-metdat <- plotUtils::read_table_fast(mdat_file)
-
-feats <- read.table(list.files(data_dir, full.names = T)[2])
-rownames(feats) <- feats[, 2]
-
-seur@meta.data$celltype_final <- metdat$celltypes_final[match(rownames(seur@meta.data),
-                                                              metdat$index)]
-seur@meta.data$celltype_major <- metdat$major_celltypes[match(rownames(seur@meta.data),
-                                                              metdat$index)]
-seur@meta.data$donor <- metdat$Donor[match(rownames(seur@meta.data),
-                                           metdat$index)]
-seur@meta.data$age <- metdat$Age[match(rownames(seur@meta.data),
-                                       metdat$index)]
-seur[["RNA"]]@meta.features <- feats
 
 
 # Create toy dataset
@@ -1086,31 +1052,57 @@ cellsort_toy <- create_cellsort_obj(seur_toy,
                                     shiftlog = F)
 cellsort_toy <- build_centroid_graph(cellsort = cellsort_toy,
                                      centroid_ids_in = "orig.ident",
-                                     k = 5,
+                                     k = 7,
                                      sameage_res = 1,
                                      sameage_clust_alg = "louvain",
                                      plot_intermed_graphs = T)
-#seur <- FindVariableFeatures(seur,
-#                             selection.method = "vst",
-#                             nfeatures = 5000)
 
+cellsort_toy <- build_cell_graph(cellsort_toy,
+                                 centroid_ids_in = "orig.ident",
+                                 k = 100,
+                                 algo = "edmonds",
+                                 parallelize = T)
 
-#expr <- paste0(cell_ids_in, " == '", target_cell, "'")
-#seur <- subset(seur, subset = eval(parse(text = expr)))
-#seur <- seur[, seur@meta.data[[cell_ids_in]] == target_cell]
+plot_graph(cellsort_toy$cell_graph,
+           color = "age",
+           plot_labels = F,
+           node_size = 3,
+           graph_layout = "tree",
+           root = names(which(igraph::degree(cellsort_toy$cell_graph,
+                                             mode = "in") == 0)))
 
-#seur <- subset_celltype(seur, cell_ids_in, target_cell)
+################################################################################
+# Real data                                                                    #
+################################################################################
 
+# Load data and create seurat object
+################################################################################
 
-#DefaultAssay(seur) <- "RNA"
-#mat <- LayerData(seur, layer = "counts")
-#mat <- as.matrix(seur)
-#mat <- shifted_log_transform(mat)
+seur <- Seurat::Read10X(data.dir = data_dir)
+seur <- CreateSeuratObject(counts = seur)
+metdat <- plotUtils::read_table_fast(mdat_file)
+
+feats <- read.table(list.files(data_dir, full.names = T)[2])
+rownames(feats) <- feats[, 2]
+
+seur@meta.data$celltype_final <- metdat$celltypes_final[match(rownames(seur@meta.data),
+                                                              metdat$index)]
+seur@meta.data$celltype_major <- metdat$major_celltypes[match(rownames(seur@meta.data),
+                                                              metdat$index)]
+seur@meta.data$donor <- metdat$Donor[match(rownames(seur@meta.data),
+                                           metdat$index)]
+seur@meta.data$age <- metdat$Age[match(rownames(seur@meta.data),
+                                       metdat$index)]
+seur[["RNA"]]@meta.features <- feats
+
+# Run workflow
+################################################################################
 
 cellsort <- create_cellsort_obj(seur,
                                 cell_ids_in = cell_ids_in,
                                 target_cell = target_cell,
-                                n_var_features = 5000)
+                                n_var_features = 5000,
+                                shiftlog = T)
 
 cellsort <- build_centroid_graph(cellsort = cellsort,
                                  centroid_ids_in = "donor",
@@ -1118,4 +1110,20 @@ cellsort <- build_centroid_graph(cellsort = cellsort,
                                  sameage_res = 1,
                                  sameage_clust_alg = "louvain",
                                  plot_intermed_graphs = F)
+
 plot_graph(cellsort$centroid_graph, color = "age")
+
+
+cellsort <- build_cell_graph(cellsort = cellsort,
+                             centroid_ids_in = "donor",
+                             k = 20,
+                             algo = "edmonds",
+                             parallelize = T)
+
+plot_graph(cellsort$cell_graph,
+           color = "age",
+           plot_labels = F,
+           node_size = 3,
+           graph_layout = "tree",
+           root = names(which(igraph::degree(cellsort$cell_graph,
+                                             mode = "in") == 0)))
