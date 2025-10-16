@@ -8,9 +8,10 @@ library(RBGL)
 library(ggplot2)
 library(RANN)
 library(irlba)
+library(matrixStats)
 
 data_dir <- "/Users/guillem.santamaria/Documents/postdoc/comput/neurodeg_aging_project/data/counts_data/GSE254569/counts/extracted_data/"
-outDir <- "/Users/guillem.santamaria/Documents/postdoc/comput/neurodeg_aging_project/results/cellsort/"
+outDir <- "/Users/guillem.santamaria/Documents/postdoc/comput/neurodeg_aging_project/results/cellsorter/"
 plotUtils::create_dir_if_not(outDir)
 mdat_file <- "/Users/guillem.santamaria/Documents/postdoc/comput/neurodeg_aging_project/data/counts_data/GSE254569/metadata/metadata/metadata.csv"
 target_cell <- "Exc_L2-3"
@@ -134,9 +135,11 @@ create_cellsort_obj <- function(seur,
                                 target_cell = NULL,
                                 assay = "RNA",
                                 layer = "counts",
-                                #dim_red = NULL,
+                                dim_red = NULL,
                                 n_var_features = NULL,
-                                shiftlog = T){
+                                shiftlog = T,
+                                center = T,
+                                scale = F){
         #assay <- "RNA"
         #layer <- "counts"
         if(class(seur)[1] != "Seurat"){
@@ -147,7 +150,7 @@ create_cellsort_obj <- function(seur,
         }
         if (!is.null(n_var_features)){
                 if (is.numeric(n_var_features)){
-                        message(sprintf("Identifying %s most variable genes...",
+                        message(sprintf("Identifying the %s most variable genes...",
                                         n_var_features))
                         seur <- FindVariableFeatures(seur,
                                                      nfeatures = n_var_features)
@@ -165,19 +168,55 @@ create_cellsort_obj <- function(seur,
         if (shiftlog){
                 mat <- shifted_log_transform(mat)
         }
-        
         mat <- mat[genes, ]
+        # Scale and center
+        means <- rowMeans(mat)
+        sds <- sqrt(rowMeans(mat^2) - (rowMeans(mat))^2)
+        if (any(sds == 0)){
+                warning("There are %s genes with SD == 0. They will be removed.",
+                        sum(sds == 0))
+                mat <- mat[sds != 0, ]
+                means <- means[sds != 0]
+                sds <- sds[sds != 0]
+        }
+        if (center){
+                cell_expr_stand <- (mat - means)
+        }
+        if (scale){
+                cell_expr_stand <- cell_expr_stand / sds
+        }
+        if (scale | center){
+                default_slot <- "cell_expr_stand"
+        }else{
+                default_slot <- "cell_expr"
+        }
         meta <- seur@meta.data
         obj <- list(cell_expr = mat,
-                    cell_expr_stand = NULL,
+                    cell_expr_stand = cell_expr_stand,
+                    pca_scores = NULL,
+                    pca_loads = NULL,
                     cent_expr = NULL,
                     cent_expr_stand = NULL,
-                    means = NULL,
-                    sds = NULL,
+                    means = means,
+                    sds = sds,
                     cell_metadata = meta,
                     centroid_metadata = NULL,
                     centroid_graph = NULL,
-                    cell_graph = NULL)
+                    cell_graph = NULL,
+                    default_slot = default_slot)
+        if (!is.null(dim_red)){
+                message(sprintf("Computing %s first PCs...", dim_red))
+                pca <- prcomp_irlba(t(cell_expr_stand),
+                                    n = dim_red,
+                                    retx = T,
+                                    center = F,
+                                    scale. = F)
+                obj$pca_scores <- t(pca$x)
+                obj$pca_loads <- pca$rotation
+                colnames(obj$pca_scores) <- colnames(cellsort$cell_expr)
+                rownames(obj$pca_loads) <- rownames(cellsort$cell_expr)
+                obj$default_slot <- "pca_scores"
+        }
         class(obj) <- "cellsort"
         return(obj)
 }
@@ -198,7 +237,7 @@ get_centroids <- function(cellsort, centroid_ids_in){
         }
         centroid_ids <- unique(cellsort$cell_metadata[, centroid_ids_in])
         centroid_mat <- sapply(centroid_ids,
-                               function(x) rowMeans(cellsort$cell_expr[, cellsort$cell_metadata[, centroid_ids_in] == x]))
+                               function(x) rowMeans(cellsort[[cellsort$default_slot]][, cellsort$cell_metadata[, centroid_ids_in] == x]))
         colnames(centroid_mat) <- centroid_ids
         cellsort$cent_expr <- centroid_mat
         cent_metdat <- data.frame(centroid_id = centroid_ids,
@@ -210,25 +249,25 @@ get_centroids <- function(cellsort, centroid_ids_in){
                                                          colnames(cellsort$cent_expr))]
         
         cellsort$centroid_metadata <- cent_metdat
-        means <- apply(cellsort$cent_expr, 1, mean)
-        sds <- apply(cellsort$cent_expr, 1, sd)
-        if (any(sds == 0)){
-                warning("There are %s genes with SD == 0. They will be removed.",
-                        sum(sds == 0))
-                means <- means[sds != 0]
-                cellsort$cent_expr <- cellsort$cent_expr[sds != 0, ]
-                cellsort$cell_expr <- cellsort$cell_expr[sds != 0, ]
-                sds <- sds[sds != 0]
-        }
-        cellsort$cent_expr_stand <- sweep(sweep(cellsort$cent_expr,
-                                                1,
-                                                means,
-                                                "-"),
-                                          1,
-                                          sds, "/")
+        #means <- apply(cellsort$cent_expr, 1, mean)
+        #sds <- apply(cellsort$cent_expr, 1, sd)
+        #if (any(sds == 0)){
+        #        warning("There are %s genes with SD == 0. They will be removed.",
+        #                sum(sds == 0))
+        #        means <- means[sds != 0]
+        #        cellsort$cent_expr <- cellsort$cent_expr[sds != 0, ]
+        #        cellsort$cell_expr <- cellsort$cell_expr[sds != 0, ]
+        #        sds <- sds[sds != 0]
+        #}
+        #cellsort$cent_expr_stand <- sweep(sweep(cellsort$cent_expr,
+        #                                        1,
+        #                                        means,
+        #                                        "-"),
+        #                                  1,
+        #                                  sds, "/")
         # Store means and sds to use them on cell data afterwards
-        cellsort$means <- means
-        cellsort$sds <- sds
+        #cellsort$means <- means
+        #cellsort$sds <- sds
         return(cellsort)
 }
 
@@ -313,7 +352,9 @@ group_close_sameage_centroids <- function(g, resolution = 1, alg = "louvain"){
 #        return(collapsed_sampinfo)
 #}
 
-get_mean_close_samps <- function(cent_expr, cent_info_aggr){
+get_mean_close_samps <- function(cent_expr, cent_info_aggr,
+                                 cell_expr, cell_info,
+                                 centroid_info_in = "donor"){
         cent_expr_aggr <- matrix(nrow = nrow(cent_expr),
                                  ncol = 0,
                                  dimnames = list(rownames(cent_expr),
@@ -326,7 +367,8 @@ get_mean_close_samps <- function(cent_expr, cent_info_aggr){
                         
                 }else{
                         s_split <- strsplit(s, split = "-")[[1]]
-                        cent_expr_s <- cent_expr[, colnames(cent_expr) %in% s_split]
+                        # Compute a new centroid with all the merged cells
+                        cent_expr_s <- cell_expr[, rownames(cell_info)[cell_info[, centroid_info_in] %in% s_split]]
                         exp_vec <- rowMeans(cent_expr_s)
                 }
                 cent_expr_aggr <- cbind(cent_expr_aggr,
@@ -577,38 +619,48 @@ build_centroid_graph <- function(cellsort,
         #centroid_ids_in <- "orig.ident"
         cellsort <- get_centroids(cellsort = cellsort,
                                   centroid_ids_in = centroid_ids_in)
-        g <- build_knn_graph(cellsort$cent_expr_stand,
+        #g <- build_knn_graph(cellsort$cent_expr_stand,
+        #                     cellsort$centroid_metadata,
+        #                     k = k)
+        g <- build_knn_graph(cellsort$cent_expr,
                              cellsort$centroid_metadata,
                              k = k)
+        print("jo")
         if(!is_dag(g)){
                 cent_info_aggr <- group_close_sameage_centroids(g,
                                                                 resolution = sameage_res,
                                                                 alg = sameage_clust_alg)
                 cent_expr_aggr <- get_mean_close_samps(cellsort$cent_expr,
-                                                       cent_info_aggr = cent_info_aggr)
+                                                       cent_info_aggr = cent_info_aggr,
+                                                       cell_expr = cellsort[[cellsort$default_slot]],
+                                                       cell_info = cellsort$cell_metadata,
+                                                       centroid_info_in = centroid_ids_in)
                 cellsort$centroid_metadata <- cent_info_aggr
                 cellsort$cent_expr <- cent_expr_aggr
                 # Re-compute means and SDs for the aggregated centroids.
-                means <- apply(cellsort$cent_expr, 1, mean)
-                sds <- apply(cellsort$cent_expr, 1, sd)
-                if (any(sds == 0)){
-                        warning("There are %s genes with SD == 0. They will be removed.",
-                                sum(sds == 0))
-                        means <- means[sds != 0]
-                        cellsort$cent_expr <- cellsort$cent_expr[sds != 0, ]
-                        cellsort$cell_expr <- cellsort$cell_expr[sds != 0, ]
-                        sds <- sds[sds != 0]
-                }
-                cellsort$cent_expr_stand <- sweep(sweep(cellsort$cent_expr,
-                                                        1,
-                                                        means,
-                                                        "-"),
-                                                  1,
-                                                  sds, "/")
+                #means <- apply(cellsort$cent_expr, 1, mean)
+                #sds <- apply(cellsort$cent_expr, 1, sd)
+                #if (any(sds == 0)){
+                #        warning("There are %s genes with SD == 0. They will be removed.",
+                #                sum(sds == 0))
+                #        means <- means[sds != 0]
+                #        cellsort$cent_expr <- cellsort$cent_expr[sds != 0, ]
+                #        cellsort$cell_expr <- cellsort$cell_expr[sds != 0, ]
+                #        sds <- sds[sds != 0]
+                #}
+                #cellsort$cent_expr_stand <- sweep(sweep(cellsort$cent_expr,
+                #                                        1,
+                #                                        means,
+                #                                        "-"),
+                #                                  1,
+                #                                  sds, "/")
                 # Store means and sds to use them on cell data afterwards
-                cellsort$means <- means
-                cellsort$sds <- sds
-                g <- build_knn_graph(cent_expr = cellsort$cent_expr_stand,
+                #cellsort$means <- means
+                #cellsort$sds <- sds
+                #g <- build_knn_graph(cent_expr = cellsort$cent_expr_stand,
+                #                     cent_mdat = cellsort$centroid_metadata,
+                #                     k = k)
+                g <- build_knn_graph(cent_expr = cellsort$cent_expr,
                                      cent_mdat = cellsort$centroid_metadata,
                                      k = k)
                 if (plot_intermed_graphs){
@@ -694,9 +746,7 @@ assign_cell_to_edge <- function(cell_mat, centroid_mat, edges,
         cell_fun <- function(i) {
                 cell_name <- colnames(cell_mat)[i]
                 cell_vec <- cell_mat[, i]
-                dists <- get_cell_to_edges_dist(cell_vec,
-                                                centroids_A,
-                                                centroids_B)
+                dists <- get_cell_to_edges_dist(cell_vec, centroids_A, centroids_B)
                 j <- which.min(dists$distance)
                 return(data.frame(from = edges[j, 1],
                                   to = edges[j, 2],
@@ -790,140 +840,6 @@ prune_cell_edges <- function(cell_edges, cell_edge_mat, edges, in_edge) {
                 }
         }
         return(cell_edges)
-}
-
-"youngest_cell"
-in_edge <- edges[edges[, 1] == "youngest_cell", ]
-cell_edge_mat <- cell_edge
-
-# Start with an empty matrix
-cell_edges <- matrix(nrow = 0, ncol = 2)
-
-get_cell_edges <- function(edges, in_edge, cell_edge_mat, cell_edges){
-        # Ensure in_edge is a matrix
-        if (!is.matrix(in_edge)) {
-                in_edge <- matrix(in_edge, nrow = 1)
-        }
-        for (i in 1:nrow(in_edge)) {
-                in_vec <- in_edge[i, ]
-                if (!(in_vec[2] %in% edges[, 1])) {
-                        return(cell_edges)
-                } else {
-                        out_edge <- edges[edges[, 1] == in_vec[2], , drop = FALSE]
-                        # cells connected to incoming edge
-                        cells_in <- cell_edge_mat$cell[
-                                cell_edge_mat$from == in_vec[1] & cell_edge_mat$to == in_vec[2]
-                        ]
-                        # cells connected to outgoing edges
-                        cells_out <- c()
-                        for (j in 1:nrow(out_edge)) {
-                                o <- out_edge[j, ]
-                                co <- cell_edge_mat$cell[
-                                        cell_edge_mat$from == o[1] & cell_edge_mat$to == o[2]
-                                ]
-                                cells_out <- c(cells_out, co)
-                        }
-                        # Get edges for cells that respect skeleton edges and
-                        # call recursion.
-                        from <- rep(cells_in, each = (length(cells_in) - 1 + length(cells_out)))
-                        to <- as.vector(sapply(cells_in,
-                                               function(x) c(cells_in[cells_in != x], cells_out)))
-                        to_bind <- matrix(c(from, to), ncol = 2)
-                        cell_edges <- rbind(cell_edges,
-                                            to_bind)
-                        cell_edges <- get_cell_edges(edges,
-                                                     in_edge,
-                                                     cell_edge_mat,
-                                                     cell_edges)
-                }
-        }
-}
-
-cell_mat <- cellsort$cell_expr_stand
-
-get_cell_edges <- function(edges, in_edge, cell_edge_mat) {
-        # Ensure in_edge is a matrix
-        if (!is.matrix(in_edge)) in_edge <- matrix(in_edge, nrow = 1)
-        
-        # Precompute lookup tables for fast access
-        edges_by_from <- lapply(split(seq_len(nrow(edges)), edges[,1]), function(idx) {
-                edges[idx, , drop = FALSE]
-        })
-        cells_by_edge <- split(cell_edge_mat$cell,
-                               paste(cell_edge_mat$from,
-                                     cell_edge_mat$to))
-        
-        # Recursive helper
-        traverse_edge <- function(edge) {
-                key <- paste(edge[1], edge[2])
-                
-                # Cells in current edge
-                cells_in <- cells_by_edge[[key]]
-                if (is.null(cells_in)) return(NULL)
-                
-                # Outgoing edges
-                out_edges <- edges_by_from[[edge[2]]]
-                
-                # Cells in outgoing edges
-                cells_out <- NULL
-                if (!is.null(out_edges)) {
-                        cells_out <- unlist(lapply(seq_len(nrow(out_edges)), function(i) {
-                                k <- paste(out_edges[i,1], out_edges[i,2])
-                                cells_by_edge[[k]]
-                        }))
-                }
-                
-                # Generate cell-to-cell connections for current edge
-                from <- rep(cells_in, each = length(cells_in) - 1 + length(cells_out))
-                to <- unlist(lapply(cells_in, function(x) c(setdiff(cells_in, x), cells_out)))
-                #sub_cell_mat <- cell_mat[, c(from, to), drop = F]
-                #nn <- nn2(t(sub_cell_mat), k = k)
-                
-                #n <- nrow(nn$nn.dist)
-                #cell_edges <- cbind(colnames(cell_mat)[rep(1:n, k)],
-                #                    colnames(cell_mat)[as.vector(nn$nn.idx)])
-                # Obtain edge weights
-                #w <- 1 / (1 + as.vector(nn$nn.dist))
-                #names(w) <- paste(cell_edges[,1], cell_edges[,2], sep = "_")
-                
-                res <- cbind(from, to)
-                
-                # Recurse on outgoing edges
-                if (!is.null(out_edges)) {
-                        res <- rbind(res, do.call(rbind, lapply(seq_len(nrow(out_edges)), function(i) {
-                                traverse_edge(out_edges[i,])
-                        })))
-                }
-                
-                return(res)
-        }
-        
-        # Start recursion from root edge(s)
-        cell_edges <- lapply(seq_len(nrow(in_edge)), function(i) {
-                traverse_edge(in_edge[i,])})
-        cell_edges <- do.call(rbind, lapply(seq_len(nrow(in_edge)), function(i) {
-                traverse_edge(in_edge[i,])
-        }))
-        
-        return(cell_edges)
-}
-
-
-cell_edges <- get_cell_edges(edges, in_edge, cell_edge_mat)
-
-chunk_size <- 1e6
-n_edges <- nrow(cell_edges)
-dists <- numeric(n_edges)
-
-for (i in seq(1, n_edges, by = chunk_size)) {
-        idx <- i:min(i + chunk_size - 1, n_edges)
-        
-        from_idx <- match(cell_edges[idx, 1], colnames(cell_mat))
-        to_idx   <- match(cell_edges[idx, 2], colnames(cell_mat))
-        
-        diffs <- cell_mat[, from_idx, drop = FALSE] - cell_mat[, to_idx, drop = FALSE]
-        dists[idx] <- sqrt(colSums(diffs^2))
-        1 / (1 + dist_yng_cell)
 }
 
 # Given the edges of the backbone graph (edges), its root (root), the
@@ -1022,14 +938,16 @@ build_cell_graph <- function(cellsort,
         centroid_ids_in <- "donor"
         #centroid_ids_in <- "orig.ident"
         parallelize <- T
-        cores <- 10
         k <- 20
         algo <- "edmonds"
+        cores = 6
         
         start_time <- Sys.time()
-        cell_mat <- cellsort$cell_expr
+        #cell_mat <- cellsort$cell_expr_stand
+        cell_mat <- cellsort[[cellsort$default_slot]]
         backbone_graph <- cellsort$centroid_graph
-        centroid_mat <- cellsort$cent_expr_stand
+        #centroid_mat <- cellsort$cent_expr_stand
+        centroid_mat <- cellsort$cent_expr
         cell_metdat <- cellsort$cell_metadata
         
         #backbone_graph <- g_pruned
@@ -1052,7 +970,7 @@ build_cell_graph <- function(cellsort,
         if (length(all_paths) > 2){
                 # Keep only paths longer than the median
                 path_lens <- sapply(all_paths, length)
-                all_paths <- all_paths[path_lens > median(path_lens)]
+                all_paths <- all_paths[path_lens > mean(path_lens)]
         }
         
         
@@ -1069,14 +987,14 @@ build_cell_graph <- function(cellsort,
         #mean_centroids <- apply(centroid_mat, 1, mean)
         #sd_centroids <- apply(centroid_mat, 1, sd)
         #centroid_mat <- (centroid_mat - mean_centroids)/sd_centroids
-        message("Scaling cell expression...")
-        cell_expr_stand <- cellsort$cell_expr
+        #message("Scaling cell expression...")
+        #cell_expr_stand <- cellsort$cell_expr
         #cell_expr_stand <- t(cellsort$cell_expr)
         #cell_expr_stand <- sweep(cell_expr_stand, 2, cellsort$means, "-")
         #cell_expr_stand <- sweep(cell_expr_stand, 2, cellsort$sds, "/")
         #cellsort$cell_expr_stand <- t(cell_expr_stand)
-        cell_expr_stand <- (cell_mat - cellsort$means)/cellsort$sds
-        cellsort$cell_expr_stand <- cell_expr_stand
+        #cell_expr_stand <- (cell_mat - cellsort$means)/cellsort$sds
+        #cellsort$cell_expr_stand <- cell_expr_stand
         
         # Find the youngest cell by identifying the direction of change
         # across the trunk, and identifying the cell that goes most in the 
@@ -1115,7 +1033,10 @@ build_cell_graph <- function(cellsort,
         # (perpendicular, or shortest path, from the cell to the edge). Does
         # this for each cell, and every edge, and then assigns the cell to the
         # centroid with the minimum distance
-        cell_edge <- assign_cell_to_edge(cellsort$cell_expr_stand, centroid_mat, edges,
+        #cell_edge <- assign_cell_to_edge(cellsort$cell_expr_stand, centroid_mat, edges,
+        #                                 parallelize = parallelize,
+        #                                 cores = cores)
+        cell_edge <- assign_cell_to_edge(cellsort$cell_expr, centroid_mat, edges,
                                          parallelize = parallelize,
                                          cores = cores)
         
@@ -1125,7 +1046,7 @@ build_cell_graph <- function(cellsort,
         cell_g <- get_cell_graph(edges = edges,
                                  root = "youngest_cell",
                                  cell_edge_mat = cell_edge,
-                                 cell_mat = cellsort$cell_expr_stand,
+                                 cell_mat = cell_mat,
                                  k = k,
                                  cell_metdat = cell_metdat,
                                  cell_root = youngest_cell,
@@ -1196,8 +1117,6 @@ seur_toy <- CreateSeuratObject(counts = X_cells,
 seur_toy@meta.data$age <- cell_metdat$age[match(rownames(seur_toy@meta.data),
                                                 cell_metdat$cell_name)]
 
-saveRDS(seur_toy, file = sprintf("%sseur_toy.rds", outDir))
-
 cellsort_toy <- create_cellsort_obj(seur_toy,
                                     cell_ids_in = NULL,
                                     target_cell = NULL,
@@ -1247,8 +1166,6 @@ seur@meta.data$age <- metdat$Age[match(rownames(seur@meta.data),
                                        metdat$index)]
 seur[["RNA"]]@meta.features <- feats
 
-saveRDS(seur, file = sprintf("%sGSE254569_ctrls_seur.rds", outDir))
-
 # Run workflow
 ################################################################################
 
@@ -1256,9 +1173,12 @@ cellsort <- create_cellsort_obj(seur,
                                 cell_ids_in = cell_ids_in,
                                 target_cell = target_cell,
                                 n_var_features = 5000,
-                                shiftlog = T)
-saveRDS(cellsort, file = sprintf("%scellsort.rds", outDir))
-cellsort <- readRDS(sprintf("%scellsort.rds", outDir))
+                                shiftlog = T,
+                                dim_red = 100,
+                                center = T,
+                                scale = F)
+saveRDS(cellsort, file = sprintf("%scellsort_alt.rds", outDir))
+cellsort <- readRDS(sprintf("%scellsort_alt.rds", outDir))
 
 cellsort <- build_centroid_graph(cellsort = cellsort,
                                  centroid_ids_in = "donor",
