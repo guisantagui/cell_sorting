@@ -18,6 +18,7 @@ library(transformGamPoi)
 library(igraph)
 
 library(Rcpp)
+library(uwot)
 #setwd("/Users/guillem.santamaria/Documents/postdoc/comput/distutils")
 
 #Rcpp::compileAttributes()
@@ -2120,13 +2121,16 @@ x_pca <- irlba::prcomp_irlba(Matrix::t(cellsort$cell_expr), n = 100)
 end_time <- Sys.time()
 elapsed <- round(as.numeric(end_time - start_time, units = "mins"), digits = 3)
 print(sprintf("PCA done. %s minutes elapsed", elapsed))
+cor_method <- "pearson"
+n_comps_agecor <- 10
 
 X <- x_pca$x
 
 X <- X[, order(abs(apply(x_pca$x,
                          2,
                          function(x) cor(x,
-                                         cellsort$cell_metadata$age))), decreasing = T)[1:10]]
+                                         cellsort$cell_metadata$age,
+                                         method = cor_method))), decreasing = T)[1:n_comps_agecor]]
 
 X_toy <- as.matrix(Matrix::t(cellsort_toy$cell_expr))
 age_vec_toy <- cellsort_toy$cell_metadata$age
@@ -2148,13 +2152,14 @@ tree_toy <- computeElasticPrincipalTree_edit(X_toy,
 plot(tree_toy[[1]]$age_tau$pseudotime, tree_toy[[1]]$age_tau$average_age)
 
 cor(tree_toy[[1]]$age_tau$pseudotime,
-    tree_toy[[1]]$age_tau$average_age)
+    tree_toy[[1]]$age_tau$average_age,
+    method = cor_method)
 
 plot(tree_toy[[1]]$NodePositions[, 1],
      tree_toy[[1]]$NodePositions[, 2])
 
 tree_real <- computeElasticPrincipalTree_edit(X,
-                                              NumNodes = 15,
+                                              NumNodes = 25,
                                               Lambda = 0.03, Mu = 0.01,
                                               age_vec = cellsort$cell_metadata$age,
                                               Do_PCA = F,
@@ -2164,4 +2169,78 @@ tree_real <- computeElasticPrincipalTree_edit(X,
 
 plot(tree_real[[1]]$age_tau$pseudotime, tree_real[[1]]$age_tau$average_age)
 cor(tree_real[[1]]$age_tau$pseudotime,
-    tree_real[[1]]$age_tau$average_age)
+    tree_real[[1]]$age_tau$average_age,
+    method = cor_method)
+
+
+age_vec <- cellsort$cell_metadata$age
+tree_obj <- tree_real[[1]]
+dat <- X
+n_comps <- 10
+n_neighbors <- 15
+min_dist <- 0.01
+plot_topage <- F
+dim_plot <- c(1, 2)
+
+
+dat_umap <- uwot::umap(dat, ret_model = T,
+                       n_components = n_comps,
+                       n_neighbors = n_neighbors,
+                       min_dist = min_dist)
+
+df <- as.data.frame(dat_umap$embedding)
+
+colnames(df) <- paste0("UMAP", 1:ncol(df))
+
+if (plot_topage){
+        cor_embed_age <- apply(df, 2, cor, y = age_vec, method = cor_method)
+        top_age_comps <- order(abs(cor_embed_age), decreasing = T)[1:2]
+        message(sprintf("Plotting top 2 UMAP components associated to age: UMAP%s (x, %s cor = %s) and UMAP%s (y, %s cor = %s)",
+                        top_age_comps[1],
+                        cor_method,
+                        round(cor_embed_age[top_age_comps[1]], digits = 3),
+                        top_age_comps[2],
+                        cor_method,
+                        round(cor_embed_age[top_age_comps[2]], digits = 3)))
+        
+        
+        comp_x <- colnames(df)[top_age_comps[1]]
+        comp_y <- colnames(df)[top_age_comps[2]]
+        
+        df <- df[, top_age_comps]
+}else{
+        message(sprintf("Plotting components UMAP%s (x) and UMAP%s (y).",
+                        dim_plot[1],
+                        dim_plot[2]))
+        comp_x <- sprintf("UMAP%s", dim_plot[1])
+        comp_y <- sprintf("UMAP%s", dim_plot[2])
+        top_age_comps <- c(comp_x, comp_y)
+        df <- df[, top_age_comps]
+}
+
+df$age <- age_vec
+
+node_umap <- uwot::umap_transform(tree_obj$NodePositions, model = dat_umap)
+colnames(node_umap) <- paste0("UMAP", 1:ncol(node_umap))
+node_umap <- node_umap[, top_age_comps]
+edges <- as_edgelist(tree_obj$g)
+nodes_df <- as.data.frame(node_umap)
+nodes_df$mean_age <- tree_obj$age_tau$average_age
+segments_df <- data.frame(x = node_umap[edges[, 1], 1],
+                          y = node_umap[edges[, 1], 2],
+                          xend = node_umap[edges[, 2], 1],
+                          yend = node_umap[edges[, 2], 2])
+
+
+
+plt <- ggplot(df, aes(x = .data[[comp_x]], .data[[comp_y]], col = age)) +
+        scale_color_gradient(low = "blue", high = "red", name = "Cell Age") +
+        geom_point(size = 0.3, alpha = 0.6, stroke = 0) +
+        ggnewscale::new_scale_color() +
+        geom_segment(mapping = aes(x = x, y = y, xend = xend, yend = yend), data = segments_df, inherit.aes = F) +
+        geom_point(mapping = aes(x = .data[[comp_x]], y = .data[[comp_y]], col = mean_age), data = nodes_df,
+                   size = 3, inherit.aes = F) +
+        scale_color_gradient(low = "blue", high = "red", name = "Mean Age") +
+        theme_minimal()
+        
+plt
