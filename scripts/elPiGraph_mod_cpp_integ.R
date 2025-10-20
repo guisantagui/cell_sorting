@@ -1,8 +1,8 @@
 if(!require("devtools")){
         install.packages("devtools")
 }
-if (!require(distutils, quietly = T)){
-        devtools::install_github("Albluca/distutils", upgrade = "never")
+if (!require(distutils_agemod, quietly = T)){
+        devtools::install_github("guisantagui/distutils_agemod", upgrade = "never")
 }
 library(distutils)
 
@@ -15,24 +15,39 @@ library(igraph)
 library(Iso)
 library(Seurat)
 library(transformGamPoi)
+library(igraph)
+
+library(Rcpp)
+#setwd("/Users/guillem.santamaria/Documents/postdoc/comput/distutils")
+
+#Rcpp::compileAttributes()
+#devtools::install()
+
+# Dir stuff
+################################################################################
 
 outDir <- "/Users/guillem.santamaria/Documents/postdoc/comput/neurodeg_aging_project/results/cellsort/"
-seur_file <- sprintf("%sGSE254569_ctrls_seur.rds", outDir)
 
+seur_file <- sprintf("%sGSE254569_ctrls_seur.rds", outDir)
 seur_toy_file <- sprintf("%sseur_toy.rds", outDir)
 
-
 donor_ids_in <- "donor"
-
-donor_ids_in_toy <- "orig.ident"
-
 cell_ids_in <- "celltype_final"
 target_cell <- "Exc_L2-3"
 
-#cell_ids_in <- NULL
-#target_cell <- NULL
+donor_ids_in_toy <- "orig.ident"
+cell_ids_in_toy <- NULL
+target_cell_toy <- NULL
 
-# cellsorter functions
+# Load data
+################################################################################
+
+seur <- readRDS(seur_file)
+
+seur_toy <- readRDS(seur_toy_file)
+
+# cellsorter functions (only for normalization purposes, vestigial. Need to be
+# removed)
 ################################################################################
 
 # Filter Seurat object to keep only cells of a given cell type.
@@ -105,110 +120,58 @@ create_cellsort_obj <- function(seur,
         return(obj)
 }
 
-# Load data
-################################################################################
-
-# Load Seurat object
-
-seur <- readRDS(seur_file)
-
-seur_toy <- readRDS(seur_toy_file)
-
-#X <- t(seur@assays$RNA$counts)
-
-cellsort <- create_cellsort_obj(seur = seur, cell_ids_in = cell_ids_in, target_cell = target_cell, n_var_features = 5000)
-
-cellsort_toy <- create_cellsort_obj(seur = seur, cell_ids_in = cell_ids_in, target_cell = target_cell, shiftlog = F)
-
-
-#X <- Matrix::t(cellsort$cell_expr)
-
-
-start_time <- Sys.time()
-x_pca <- irlba::prcomp_irlba(Matrix::t(cellsort$cell_expr), n = 100)
-end_time <- Sys.time()
-elapsed <- round(as.numeric(end_time - start_time, units = "mins"), digits = 3)
-print(sprintf("PCA done. %s minutes elapsed", elapsed))
-
-X_toy <- Matrix::t(cellsort$cell_expr)
-
-X <- x_pca$x
-
-#X <- X[, order(abs(apply(x_pca$x, 2, function(x) cor(x, cellsort$cell_metadata$age))), decreasing = T)[1:10]]
-
-#treetst <- computeElasticPrincipalTree(X = as.matrix(X), NumNodes = length(unique(seur@meta.data[, donor_ids_in])), Lambda = .03, Mu = .01, Do_PCA = F)
-
-#treetst <- computeElasticPrincipalTree(X = tree_data, NumNodes = 60, Lambda = .03, Mu = .01, Do_PCA = T)
-
-#treetst <- computeElasticPrincipalTree(X = as.matrix(X), NumNodes = length(levels(seur@meta.data[, donor_ids_in])), Lambda = .03, Mu = .01)
-
-# Cust Funcs
-
-get_pseudotime <- function(g, root_node){
-        dists <- igraph::distances(g, 
-                                   v = root_node, 
-                                   to = V(g), 
-                                   mode = "out")
-        pseudo <- dists[1, ]
-        pseudo <- (pseudo - min(pseudo, na.rm = TRUE)) / 
-                (max(pseudo, na.rm = TRUE) - min(pseudo, na.rm = TRUE))
-        return(pseudo)
-}
-
-
-
 # Mod ElPiGraph.R Funcs
 ################################################################################
 
 # Edit computeElasticPrincipalTree to call custom
 # computeElasticPrincipalGraphWithGrammars_edit.
 computeElasticPrincipalTree_edit <- function(X,
-                                        NumNodes,
-                                        NumEdges = Inf,
-                                        InitNodes = 2,
-                                        Lambda = 0.01,
-                                        Mu = 0.1,
-                                        MaxNumberOfIterations = 10,
-                                        TrimmingRadius = Inf,
-                                        eps = .01,
-                                        Do_PCA = TRUE,
-                                        InitNodePositions = NULL,
-                                        InitEdges = NULL,
-                                        ElasticMatrix = NULL,
-                                        AdjustVect = NULL,
-                                        CenterData = TRUE,
-                                        ComputeMSEP = TRUE,
-                                        verbose = FALSE,
-                                        ShowTimer = FALSE,
-                                        ReduceDimension = NULL,
-                                        drawAccuracyComplexity = TRUE,
-                                        drawPCAView = TRUE,
-                                        drawEnergy = TRUE,
-                                        n.cores = 1,
-                                        MinParOP = 20,
-                                        ClusType = "Sock",
-                                        nReps = 1,
-                                        Subsets = list(),
-                                        ProbPoint = 1,
-                                        Mode = 1,
-                                        FinalEnergy = "Base",
-                                        alpha = 0,
-                                        beta = 0,
-                                        FastSolve = FALSE,
-                                        ICOver = NULL,
-                                        DensityRadius = NULL,
-                                        AvoidSolitary = FALSE,
-                                        EmbPointProb = 1,
-                                        ParallelRep = FALSE,
-                                        AvoidResampling = FALSE,
-                                        SampleIC = TRUE,
-                                        AdjustElasticMatrix = NULL,
-                                        AdjustElasticMatrix.Initial = NULL,
-                                        Lambda.Initial = NULL,
-                                        Mu.Initial = NULL,
-                                        age_vec = NULL,
-                                        eta = 1e-03,
-                                        ...) {
+                                             NumNodes,
+                                             NumEdges = Inf,
+                                             InitNodes = 2,
+                                             Lambda = 0.01,
+                                             Mu = 0.1,
+                                             MaxNumberOfIterations = 10,
+                                             TrimmingRadius = Inf,
+                                             eps = .01,
+                                             Do_PCA = TRUE,
+                                             InitNodePositions = NULL,
+                                             InitEdges = NULL,
+                                             ElasticMatrix = NULL,
+                                             AdjustVect = NULL,
+                                             CenterData = TRUE,
+                                             ComputeMSEP = TRUE,
+                                             verbose = FALSE,
+                                             ShowTimer = FALSE,
+                                             ReduceDimension = NULL,
+                                             drawAccuracyComplexity = TRUE,
+                                             drawPCAView = TRUE,
+                                             drawEnergy = TRUE,
+                                             n.cores = 1,
+                                             MinParOP = 20,
+                                             ClusType = "Sock",
+                                             nReps = 1,
+                                             Subsets = list(),
+                                             ProbPoint = 1,
+                                             Mode = 1,
+                                             FinalEnergy = "Base",
+                                             alpha = 0,
+                                             beta = 0,
+                                             FastSolve = FALSE,
+                                             ICOver = NULL,
+                                             DensityRadius = NULL,
+                                             AvoidSolitary = FALSE,
+                                             EmbPointProb = 1,
+                                             ParallelRep = FALSE,
+                                             AvoidResampling = FALSE,
+                                             SampleIC = TRUE,
+                                             AdjustElasticMatrix = NULL,
+                                             AdjustElasticMatrix.Initial = NULL,
+                                             Lambda.Initial = NULL,
+                                             Mu.Initial = NULL,
+                                             age_vec = NULL,
+                                             eta = 1e-03,
+                                             ...) {
         
         
         # Difine the initial configuration
@@ -276,57 +239,57 @@ computeElasticPrincipalTree_edit <- function(X,
 # functions that allocate age. Also allows bootstrapping with the age, by
 # selecting nReps > 1.
 computeElasticPrincipalGraphWithGrammars_edit <- function(X,
-                                                     NumNodes,
-                                                     NumEdges = Inf,
-                                                     InitNodes = 2,
-                                                     Lambda = 0.01,
-                                                     Mu = 0.1,
-                                                     GrowGrammars,
-                                                     ShrinkGrammars,
-                                                     GrammarOptimization = FALSE,
-                                                     MaxSteps = Inf,
-                                                     GrammarOrder = c("Grow", "Shrink"),
-                                                     MaxNumberOfIterations = 10,
-                                                     TrimmingRadius = Inf,
-                                                     eps = .01,
-                                                     Do_PCA = TRUE,
-                                                     InitNodePositions = NULL,
-                                                     AdjustVect = NULL,
-                                                     ElasticMatrix = NULL,
-                                                     InitEdges = NULL,
-                                                     CenterData = TRUE,
-                                                     ComputeMSEP = TRUE,
-                                                     verbose = FALSE,
-                                                     ShowTimer = FALSE,
-                                                     ReduceDimension = NULL,
-                                                     drawAccuracyComplexity = TRUE,
-                                                     drawPCAView = TRUE,
-                                                     drawEnergy = TRUE,
-                                                     n.cores = 1,
-                                                     ClusType = "Sock",
-                                                     MinParOP = MinParOP,
-                                                     nReps = 1,
-                                                     ParallelRep = FALSE,
-                                                     Subsets = list(),
-                                                     ProbPoint = 1,
-                                                     Mode = 1,
-                                                     FinalEnergy = "Base",
-                                                     alpha = 0,
-                                                     beta = 0,
-                                                     gamma = 0,
-                                                     FastSolve = FALSE,
-                                                     Configuration = NULL,
-                                                     DensityRadius = NULL,
-                                                     AvoidSolitary = FALSE,
-                                                     EmbPointProb = 1,
-                                                     SampleIC = TRUE,
-                                                     AvoidResampling = TRUE,
-                                                     AdjustElasticMatrix = NULL,
-                                                     AdjustElasticMatrix.Initial = NULL,
-                                                     Lambda.Initial = NULL, Mu.Initial = NULL,
-                                                     age_vec = NULL,
-                                                     eta = 1e-3,
-                                                     ...) {
+                                                          NumNodes,
+                                                          NumEdges = Inf,
+                                                          InitNodes = 2,
+                                                          Lambda = 0.01,
+                                                          Mu = 0.1,
+                                                          GrowGrammars,
+                                                          ShrinkGrammars,
+                                                          GrammarOptimization = FALSE,
+                                                          MaxSteps = Inf,
+                                                          GrammarOrder = c("Grow", "Shrink"),
+                                                          MaxNumberOfIterations = 10,
+                                                          TrimmingRadius = Inf,
+                                                          eps = .01,
+                                                          Do_PCA = TRUE,
+                                                          InitNodePositions = NULL,
+                                                          AdjustVect = NULL,
+                                                          ElasticMatrix = NULL,
+                                                          InitEdges = NULL,
+                                                          CenterData = TRUE,
+                                                          ComputeMSEP = TRUE,
+                                                          verbose = FALSE,
+                                                          ShowTimer = FALSE,
+                                                          ReduceDimension = NULL,
+                                                          drawAccuracyComplexity = TRUE,
+                                                          drawPCAView = TRUE,
+                                                          drawEnergy = TRUE,
+                                                          n.cores = 1,
+                                                          ClusType = "Sock",
+                                                          MinParOP = MinParOP,
+                                                          nReps = 1,
+                                                          ParallelRep = FALSE,
+                                                          Subsets = list(),
+                                                          ProbPoint = 1,
+                                                          Mode = 1,
+                                                          FinalEnergy = "Base",
+                                                          alpha = 0,
+                                                          beta = 0,
+                                                          gamma = 0,
+                                                          FastSolve = FALSE,
+                                                          Configuration = NULL,
+                                                          DensityRadius = NULL,
+                                                          AvoidSolitary = FALSE,
+                                                          EmbPointProb = 1,
+                                                          SampleIC = TRUE,
+                                                          AvoidResampling = TRUE,
+                                                          AdjustElasticMatrix = NULL,
+                                                          AdjustElasticMatrix.Initial = NULL,
+                                                          Lambda.Initial = NULL, Mu.Initial = NULL,
+                                                          age_vec = NULL,
+                                                          eta = 1e-3,
+                                                          ...) {
         
         # Create a cluster if requested
         
@@ -879,48 +842,48 @@ computeElasticPrincipalGraphWithGrammars_edit <- function(X,
 # Edit computeElasticPrincipalGrah to make it call ElPrincGraph_edit function,
 # instead of the native one.
 computeElasticPrincipalGraph_edit <- function(Data,
-                                         NumNodes,
-                                         NumEdges = Inf,
-                                         InitNodePositions,
-                                         AdjustVect,
-                                         InitEdges,
-                                         ElasticMatrix = NULL,
-                                         Lambda = 0.01,
-                                         Mu = 0.1,
-                                         MaxNumberOfIterations = 100,
-                                         eps = .01,
-                                         TrimmingRadius = Inf,
-                                         Do_PCA = TRUE,
-                                         CenterData = TRUE,
-                                         ComputeMSEP = TRUE,
-                                         verbose = FALSE,
-                                         ShowTimer = FALSE,
-                                         ReduceDimension = NULL,
-                                         drawAccuracyComplexity = TRUE,
-                                         drawPCAView = TRUE,
-                                         drawEnergy = TRUE,
-                                         n.cores = 1,
-                                         ClusType = "Sock",
-                                         MinParOP = 20,
-                                         Mode = 1,
-                                         FinalEnergy = "Base",
-                                         alpha = 0,
-                                         beta = 0,
-                                         gamma = 0,
-                                         GrowGrammars = list(),
-                                         ShrinkGrammars = list(),
-                                         GrammarOptimization = FALSE,
-                                         MaxSteps = Inf,
-                                         GrammarOrder = c("Grow", "Shrink"),
-                                         FastSolve = FALSE,
-                                         AvoidSolitary = FALSE,
-                                         EmbPointProb = 1,
-                                         AdjustElasticMatrix = NULL,
-                                         AdjustElasticMatrix.Initial = NULL, 
-                                         Lambda.Initial = NULL, Mu.Initial = NULL,
-                                         age_vec = NULL,
-                                         eta = 1e-3,
-                                         ...) {
+                                              NumNodes,
+                                              NumEdges = Inf,
+                                              InitNodePositions,
+                                              AdjustVect,
+                                              InitEdges,
+                                              ElasticMatrix = NULL,
+                                              Lambda = 0.01,
+                                              Mu = 0.1,
+                                              MaxNumberOfIterations = 100,
+                                              eps = .01,
+                                              TrimmingRadius = Inf,
+                                              Do_PCA = TRUE,
+                                              CenterData = TRUE,
+                                              ComputeMSEP = TRUE,
+                                              verbose = FALSE,
+                                              ShowTimer = FALSE,
+                                              ReduceDimension = NULL,
+                                              drawAccuracyComplexity = TRUE,
+                                              drawPCAView = TRUE,
+                                              drawEnergy = TRUE,
+                                              n.cores = 1,
+                                              ClusType = "Sock",
+                                              MinParOP = 20,
+                                              Mode = 1,
+                                              FinalEnergy = "Base",
+                                              alpha = 0,
+                                              beta = 0,
+                                              gamma = 0,
+                                              GrowGrammars = list(),
+                                              ShrinkGrammars = list(),
+                                              GrammarOptimization = FALSE,
+                                              MaxSteps = Inf,
+                                              GrammarOrder = c("Grow", "Shrink"),
+                                              FastSolve = FALSE,
+                                              AvoidSolitary = FALSE,
+                                              EmbPointProb = 1,
+                                              AdjustElasticMatrix = NULL,
+                                              AdjustElasticMatrix.Initial = NULL, 
+                                              Lambda.Initial = NULL, Mu.Initial = NULL,
+                                              age_vec = NULL,
+                                              eta = 1e-3,
+                                              ...) {
         ST <- date()
         tictoc::tic()
         
@@ -1089,30 +1052,30 @@ computeElasticPrincipalGraph_edit <- function(Data,
 
 # Edit calls to PrimitiveElasticGraphEmbedment to use the age-constraint one.
 ApplyOptimalGraphGrammarOpeation_edit <- function(X,
-                                             NodePositions,
-                                             ElasticMatrix,
-                                             AdjustVect = NULL,
-                                             operationtypes,
-                                             SquaredX = NULL,
-                                             verbose = FALSE,
-                                             n.cores = 1,
-                                             EnvCl = NULL,
-                                             MinParOP = 20,
-                                             MaxNumberOfIterations = 100,
-                                             eps = .01,
-                                             TrimmingRadius = Inf,
-                                             Mode = 1,
-                                             FinalEnergy = "Base",
-                                             alpha = 1,
-                                             beta = 1,
-                                             gamma = 1,
-                                             FastSolve = FALSE,
-                                             EmbPointProb = 1,
-                                             AvoidSolitary = FALSE,
-                                             AdjustElasticMatrix = NULL,
-                                             age_vec = NULL,
-                                             eta = 1e-3,
-                                             ...) {
+                                                  NodePositions,
+                                                  ElasticMatrix,
+                                                  AdjustVect = NULL,
+                                                  operationtypes,
+                                                  SquaredX = NULL,
+                                                  verbose = FALSE,
+                                                  n.cores = 1,
+                                                  EnvCl = NULL,
+                                                  MinParOP = 20,
+                                                  MaxNumberOfIterations = 100,
+                                                  eps = .01,
+                                                  TrimmingRadius = Inf,
+                                                  Mode = 1,
+                                                  FinalEnergy = "Base",
+                                                  alpha = 1,
+                                                  beta = 1,
+                                                  gamma = 1,
+                                                  FastSolve = FALSE,
+                                                  EmbPointProb = 1,
+                                                  AvoidSolitary = FALSE,
+                                                  AdjustElasticMatrix = NULL,
+                                                  age_vec = NULL,
+                                                  eta = 1e-3,
+                                                  ...) {
         
         if(is.null(AdjustVect)){
                 AdjustVect <- rep(FALSE, nrow(NodePositions))
@@ -1219,22 +1182,22 @@ ApplyOptimalGraphGrammarOpeation_edit <- function(X,
                 
                 Embed <- parallel::parLapply(cl[1:DynamicProcess], CombinedInfo, function(input){
                         PrimitiveElasticGraphEmbedment_edit(X = X,
-                                                       NodePositions = input$NodePositions,
-                                                       ElasticMatrix = input$ElasticMatrix,
-                                                       SquaredX = SquaredX,
-                                                       verbose = FALSE,
-                                                       MaxNumberOfIterations = MaxNumberOfIterations,
-                                                       eps = eps,
-                                                       FinalEnergy = FinalEnergy,
-                                                       alpha = alpha,
-                                                       beta = beta,
-                                                       gamma = gamma,
-                                                       Mode = Mode,
-                                                       TrimmingRadius = TrimmingRadius,
-                                                       FastSolve = FastSolve,
-                                                       prob = EmbPointProb,
-                                                       age_vec = age_vec,
-                                                       eta = eta)
+                                                            NodePositions = input$NodePositions,
+                                                            ElasticMatrix = input$ElasticMatrix,
+                                                            SquaredX = SquaredX,
+                                                            verbose = FALSE,
+                                                            MaxNumberOfIterations = MaxNumberOfIterations,
+                                                            eps = eps,
+                                                            FinalEnergy = FinalEnergy,
+                                                            alpha = alpha,
+                                                            beta = beta,
+                                                            gamma = gamma,
+                                                            Mode = Mode,
+                                                            TrimmingRadius = TrimmingRadius,
+                                                            FastSolve = FastSolve,
+                                                            prob = EmbPointProb,
+                                                            age_vec = age_vec,
+                                                            eta = eta)
                 })
                 
                 if(is.null(EnvCl)){
@@ -1244,21 +1207,21 @@ ApplyOptimalGraphGrammarOpeation_edit <- function(X,
         } else {
                 Embed <- lapply(CombinedInfo, function(input){
                         PrimitiveElasticGraphEmbedment_edit(X = X,
-                                                       NodePositions = input$NodePositions,
-                                                       ElasticMatrix = input$ElasticMatrix,
-                                                       SquaredX = SquaredX,
-                                                       verbose = FALSE,
-                                                       MaxNumberOfIterations = MaxNumberOfIterations,
-                                                       eps = eps,
-                                                       FinalEnergy = FinalEnergy,
-                                                       alpha = alpha,
-                                                       beta = beta,
-                                                       Mode = Mode,
-                                                       TrimmingRadius = TrimmingRadius,
-                                                       FastSolve = FastSolve,
-                                                       prob = EmbPointProb,
-                                                       age_vec = age_vec,
-                                                       eta = eta)
+                                                            NodePositions = input$NodePositions,
+                                                            ElasticMatrix = input$ElasticMatrix,
+                                                            SquaredX = SquaredX,
+                                                            verbose = FALSE,
+                                                            MaxNumberOfIterations = MaxNumberOfIterations,
+                                                            eps = eps,
+                                                            FinalEnergy = FinalEnergy,
+                                                            alpha = alpha,
+                                                            beta = beta,
+                                                            Mode = Mode,
+                                                            TrimmingRadius = TrimmingRadius,
+                                                            FastSolve = FastSolve,
+                                                            prob = EmbPointProb,
+                                                            age_vec = age_vec,
+                                                            eta = eta)
                 })
         }
         
@@ -1293,42 +1256,42 @@ ApplyOptimalGraphGrammarOpeation_edit <- function(X,
 
 # Add age_vec as an argument and remove references to package calls
 ElPrincGraph_edit <- function(X,
-                         NumNodes = 100,
-                         NumEdges = Inf,
-                         Lambda,
-                         Mu,
-                         ElasticMatrix,
-                         NodesPositions,
-                         AdjustVect,
-                         verbose = FALSE,
-                         n.cores = 1,
-                         ClusType = "Sock",
-                         MinParOP = 20,
-                         CompileReport = FALSE,
-                         ShowTimer = FALSE,
-                         ComputeMSEP = TRUE,
-                         FinalEnergy = "Base",
-                         alpha = 0,
-                         beta = 0,
-                         gamma = 0,
-                         Mode = 1,
-                         MaxNumberOfIterations = 10,
-                         MaxFailedOperations = Inf,
-                         MaxSteps = Inf,
-                         GrammarOptimization = FALSE,
-                         eps = .01,
-                         TrimmingRadius = Inf,
-                         GrowGrammars = list(),
-                         ShrinkGrammars = list(),
-                         GrammarOrder = c("Grow", "Shrink"),
-                         FastSolve = FALSE,
-                         AvoidSolitary = FALSE,
-                         EmbPointProb = 1,
-                         AdjustElasticMatrix = NULL,
-                         AdjustElasticMatrix.Initial = NULL,
-                         age_vec = NULL,
-                         eta = 1e-3,
-                         ...) {
+                              NumNodes = 100,
+                              NumEdges = Inf,
+                              Lambda,
+                              Mu,
+                              ElasticMatrix,
+                              NodesPositions,
+                              AdjustVect,
+                              verbose = FALSE,
+                              n.cores = 1,
+                              ClusType = "Sock",
+                              MinParOP = 20,
+                              CompileReport = FALSE,
+                              ShowTimer = FALSE,
+                              ComputeMSEP = TRUE,
+                              FinalEnergy = "Base",
+                              alpha = 0,
+                              beta = 0,
+                              gamma = 0,
+                              Mode = 1,
+                              MaxNumberOfIterations = 10,
+                              MaxFailedOperations = Inf,
+                              MaxSteps = Inf,
+                              GrammarOptimization = FALSE,
+                              eps = .01,
+                              TrimmingRadius = Inf,
+                              GrowGrammars = list(),
+                              ShrinkGrammars = list(),
+                              GrammarOrder = c("Grow", "Shrink"),
+                              FastSolve = FALSE,
+                              AvoidSolitary = FALSE,
+                              EmbPointProb = 1,
+                              AdjustElasticMatrix = NULL,
+                              AdjustElasticMatrix.Initial = NULL,
+                              age_vec = NULL,
+                              eta = 1e-3,
+                              ...) {
         if (!is.null(age_vec)){
                 print(sprintf("Imposing aging constraint with Eta = %s", eta))
         }
@@ -1438,14 +1401,16 @@ ElPrincGraph_edit <- function(X,
         
         if(nrow(UpdatedPG$NodePositions) >= NumNodes & !GrammarOptimization){
                 
-                FinalReport <- ElPiGraph.R:::ReportOnPrimitiveGraphEmbedment(X = X, NodePositions = UpdatedPG$NodePositions,
-                                                                             ElasticMatrix = UpdatedPG$ElasticMatrix,
-                                                                             PartData = PartitionData(X = X,
-                                                                                                      NodePositions = UpdatedPG$NodePositions,
-                                                                                                      SquaredX = SquaredX,
-                                                                                                      TrimmingRadius = TrimmingRadius,
-                                                                                                      nCores = 1),
-                                                                             ComputeMSEP = ComputeMSEP)
+                FinalReport <- ReportOnPrimitiveGraphEmbedment_edit(X = X, NodePositions = UpdatedPG$NodePositions,
+                                                                    ElasticMatrix = UpdatedPG$ElasticMatrix,
+                                                                    PartData = PartitionData(X = X,
+                                                                                             NodePositions = UpdatedPG$NodePositions,
+                                                                                             SquaredX = SquaredX,
+                                                                                             TrimmingRadius = TrimmingRadius,
+                                                                                             nCores = 1),
+                                                                    ComputeMSEP = ComputeMSEP,
+                                                                    age_vec = age_vec,
+                                                                    eta = eta)
                 
                 return(
                         list(NodePositions = UpdatedPG$NodePositions, ElasticMatrix = UpdatedPG$ElasticMatrix,
@@ -1495,30 +1460,30 @@ ElPrincGraph_edit <- function(X,
                                         }
                                         
                                         UpdatedPG <- ApplyOptimalGraphGrammarOpeation_edit(X = X,
-                                                                                      NodePositions = UpdatedPG$NodePositions,
-                                                                                      ElasticMatrix = UpdatedPG$ElasticMatrix,
-                                                                                      AdjustVect = UpdatedPG$AdjustVect,
-                                                                                      operationtypes = GrowGrammars[[k]],
-                                                                                      SquaredX = SquaredX,
-                                                                                      FinalEnergy = FinalEnergy,
-                                                                                      alpha = alpha,
-                                                                                      beta = beta,
-                                                                                      gamma = gamma,
-                                                                                      Mode = Mode,
-                                                                                      MaxNumberOfIterations = MaxNumberOfIterations,
-                                                                                      eps = eps,
-                                                                                      TrimmingRadius = TrimmingRadius,
-                                                                                      verbose = FALSE,
-                                                                                      n.cores = n.cores,
-                                                                                      EnvCl = cl,
-                                                                                      MinParOP = MinParOP,
-                                                                                      FastSolve = FastSolve,
-                                                                                      AvoidSolitary = AvoidSolitary,
-                                                                                      EmbPointProb = EmbPointProb,
-                                                                                      AdjustElasticMatrix = AdjustElasticMatrix,
-                                                                                      age_vec = age_vec,
-                                                                                      eta = eta,
-                                                                                      ...)
+                                                                                           NodePositions = UpdatedPG$NodePositions,
+                                                                                           ElasticMatrix = UpdatedPG$ElasticMatrix,
+                                                                                           AdjustVect = UpdatedPG$AdjustVect,
+                                                                                           operationtypes = GrowGrammars[[k]],
+                                                                                           SquaredX = SquaredX,
+                                                                                           FinalEnergy = FinalEnergy,
+                                                                                           alpha = alpha,
+                                                                                           beta = beta,
+                                                                                           gamma = gamma,
+                                                                                           Mode = Mode,
+                                                                                           MaxNumberOfIterations = MaxNumberOfIterations,
+                                                                                           eps = eps,
+                                                                                           TrimmingRadius = TrimmingRadius,
+                                                                                           verbose = FALSE,
+                                                                                           n.cores = n.cores,
+                                                                                           EnvCl = cl,
+                                                                                           MinParOP = MinParOP,
+                                                                                           FastSolve = FastSolve,
+                                                                                           AvoidSolitary = AvoidSolitary,
+                                                                                           EmbPointProb = EmbPointProb,
+                                                                                           AdjustElasticMatrix = AdjustElasticMatrix,
+                                                                                           age_vec = age_vec,
+                                                                                           eta = eta,
+                                                                                           ...)
                                         
                                         
                                         if(!is.list(UpdatedPG)){
@@ -1559,30 +1524,30 @@ ElPrincGraph_edit <- function(X,
                                         }
                                         
                                         UpdatedPG <- ApplyOptimalGraphGrammarOpeation_edit(X = X,
-                                                                                      NodePositions = UpdatedPG$NodePositions,
-                                                                                      ElasticMatrix = UpdatedPG$ElasticMatrix,
-                                                                                      AdjustVect = UpdatedPG$AdjustVect,
-                                                                                      operationtypes = ShrinkGrammars[[k]],
-                                                                                      SquaredX = SquaredX,
-                                                                                      Mode = Mode,
-                                                                                      FinalEnergy = FinalEnergy,
-                                                                                      alpha = alpha,
-                                                                                      beta = beta,
-                                                                                      gamma = gamma,
-                                                                                      MaxNumberOfIterations = MaxNumberOfIterations,
-                                                                                      eps = eps,
-                                                                                      TrimmingRadius = TrimmingRadius,
-                                                                                      verbose = FALSE,
-                                                                                      n.cores = n.cores,
-                                                                                      MinParOP = MinParOP,
-                                                                                      EnvCl = cl,
-                                                                                      FastSolve = FastSolve,
-                                                                                      AvoidSolitary = AvoidSolitary,
-                                                                                      EmbPointProb = EmbPointProb,
-                                                                                      AdjustElasticMatrix = AdjustElasticMatrix,
-                                                                                      age_vec = age_vec,
-                                                                                      eta = eta,
-                                                                                      ...)
+                                                                                           NodePositions = UpdatedPG$NodePositions,
+                                                                                           ElasticMatrix = UpdatedPG$ElasticMatrix,
+                                                                                           AdjustVect = UpdatedPG$AdjustVect,
+                                                                                           operationtypes = ShrinkGrammars[[k]],
+                                                                                           SquaredX = SquaredX,
+                                                                                           Mode = Mode,
+                                                                                           FinalEnergy = FinalEnergy,
+                                                                                           alpha = alpha,
+                                                                                           beta = beta,
+                                                                                           gamma = gamma,
+                                                                                           MaxNumberOfIterations = MaxNumberOfIterations,
+                                                                                           eps = eps,
+                                                                                           TrimmingRadius = TrimmingRadius,
+                                                                                           verbose = FALSE,
+                                                                                           n.cores = n.cores,
+                                                                                           MinParOP = MinParOP,
+                                                                                           EnvCl = cl,
+                                                                                           FastSolve = FastSolve,
+                                                                                           AvoidSolitary = AvoidSolitary,
+                                                                                           EmbPointProb = EmbPointProb,
+                                                                                           AdjustElasticMatrix = AdjustElasticMatrix,
+                                                                                           age_vec = age_vec,
+                                                                                           eta = eta,
+                                                                                           ...)
                                         
                                         
                                         if(!is.list(UpdatedPG)){
@@ -1608,14 +1573,16 @@ ElPrincGraph_edit <- function(X,
                 }
                 
                 if(CompileReport){
-                        tReport <- ElPiGraph.R:::ReportOnPrimitiveGraphEmbedment(X = X, NodePositions = UpdatedPG$NodePositions,
-                                                                                 ElasticMatrix = UpdatedPG$ElasticMatrix,
-                                                                                 PartData = PartitionData(X = X,
-                                                                                                          NodePositions = UpdatedPG$NodePositions,
-                                                                                                          SquaredX = SquaredX,
-                                                                                                          TrimmingRadius = TrimmingRadius,
-                                                                                                          nCores = 1),
-                                                                                 ComputeMSEP = ComputeMSEP)
+                        tReport <- ReportOnPrimitiveGraphEmbedment_edit(X = X, NodePositions = UpdatedPG$NodePositions,
+                                                                        ElasticMatrix = UpdatedPG$ElasticMatrix,
+                                                                        PartData = PartitionData(X = X,
+                                                                                                 NodePositions = UpdatedPG$NodePositions,
+                                                                                                 SquaredX = SquaredX,
+                                                                                                 TrimmingRadius = TrimmingRadius,
+                                                                                                 nCores = 1),
+                                                                        ComputeMSEP = ComputeMSEP,
+                                                                        age_vec,
+                                                                        eta)
                         FinalReport <- tReport
                         tReport <- unlist(tReport)
                         tReport[ToSrink] <- sapply(tReport[ToSrink], function(x) {
@@ -1644,14 +1611,16 @@ ElPrincGraph_edit <- function(X,
         
         if(!verbose){
                 if(!CompileReport){
-                        tReport <- ElPiGraph.R:::ReportOnPrimitiveGraphEmbedment(X = X, NodePositions = UpdatedPG$NodePositions,
-                                                                                 ElasticMatrix = UpdatedPG$ElasticMatrix,
-                                                                                 PartData = PartitionData(X = X,
-                                                                                                          NodePositions = UpdatedPG$NodePositions,
-                                                                                                          SquaredX = SquaredX,
-                                                                                                          TrimmingRadius = TrimmingRadius,
-                                                                                                          nCores = 1),
-                                                                                 ComputeMSEP = ComputeMSEP)
+                        tReport <- ReportOnPrimitiveGraphEmbedment_edit(X = X, NodePositions = UpdatedPG$NodePositions,
+                                                                        ElasticMatrix = UpdatedPG$ElasticMatrix,
+                                                                        PartData = PartitionData(X = X,
+                                                                                                 NodePositions = UpdatedPG$NodePositions,
+                                                                                                 SquaredX = SquaredX,
+                                                                                                 TrimmingRadius = TrimmingRadius,
+                                                                                                 nCores = 1),
+                                                                        ComputeMSEP = ComputeMSEP,
+                                                                        age_vec,
+                                                                        eta)
                         FinalReport <- tReport
                         tReport <- unlist(tReport)
                         tReport[ToSrink] <- sapply(tReport[ToSrink], function(x) {
@@ -1698,78 +1667,24 @@ ElPrincGraph_edit <- function(X,
                                           SquaredX = SquaredX,
                                           TrimmingRadius = TrimmingRadius,
                                           nCores = 1)
-                fac <- factor(as.integer(partData$Partition), levels = seq_len(K))
-                n_j_tab <- table(fac)
-                n_j <- integer(K)
-                n_j[as.integer(names(n_j_tab))] <- as.integer(n_j_tab)
-                mean_age_j <- rep(NA_real_, K)
-                if(length(n_j_tab)>0){
-                        mean_list <- tapply(age_vec, partData$Partition, mean)
-                        if(length(mean_list)>0){
-                                idxs <- as.integer(names(mean_list))
-                                mean_age_j[idxs] <- as.numeric(mean_list)
-                        }
-                }
-                
-                # Obtain final graph's igraph object
-                #dnodes <- 1 / (1 + as.matrix(stats::dist(UpdatedPG$NodePositions)))
-                #g_full <- igraph::graph_from_adjacency_matrix(dnodes,
-                #                                              mode="undirected",
-                #                                              weighted=TRUE,
-                #                                              diag=FALSE)
-                #mst_g <- igraph::mst(g_full, weights = igraph::E(g_full)$weight)
-                #degs <- igraph::degree(mst_g)
-                # Identify root node and compute pseudotime
-                #leaves <- which(degs == 1)
-                #if(length(leaves) > 0 && any(!is.na(mean_age_j[leaves]))){
-                #        root <- leaves[which.min(mean_age_j[leaves])]
-                #} else if(any(!is.na(mean_age_j))){
-                #        root <- which.min(mean_age_j)
-                #} else {
-                #        root <- 1L
-                #}
-                #tau_j <- as.numeric(igraph::distances(mst_g,
-                #                                      v = root,
-                #                                      to = V(mst_g)))
+                assignment <- partData$Partition
+                mean_age_j <- get_node_meanage(UpdatedPG$NodePositions,
+                                               assignment,
+                                               age_vec)
                 
                 # Obtain final graph
+                g <- get_node_graph(UpdatedPG$NodePositions,
+                                    UpdatedPG$ElasticMatrix)
                 
-                # Obtain decoded elastic matrix and
-                # extract edges.
-                dec_elMat <- ElPiGraph.R::DecodeElasticMatrix(UpdatedPG$ElasticMatrix)
-                edgs <- dec_elMat$Edges
-                # Obtain weights based on Euclidean
-                # dists
-                
-                edge_dists <- sqrt(rowSums((UpdatedPG$NodePositions[edgs[, 2], , drop = F] - UpdatedPG$NodePositions[edgs[, 1], , drop = F])^2))
-                edge_weights <- 1 / (1 + edge_dists)
-                #print(edge_dists)
-                #dnodes <- 1 / (1 + as.matrix(stats::dist(nodes_mat)))
-                g <- igraph::graph_from_edgelist(edgs, directed = F)
-                E(g)$weight <- edge_weights
-                V(g)$age <- mean_age_j
-                #mst_g <- igraph::mst(g_full, weights = igraph::E(g_full)$weight)
-                # identify leaves and assign root to 
-                # leaf with minimum age
-                degs <- igraph::degree(g)
-                leaves <- which(degs == 1)
-                root <- NA_integer_
-                if(length(leaves) > 0 && any(!is.na(mean_age_j[leaves]))){
-                        root <- leaves[which.min(mean_age_j[leaves])]
-                } else if(any(!is.na(mean_age_j))){
-                        root <- which.min(mean_age_j)
-                } else {
-                        root <- 1L
-                }
-                dist_mat_nodes <- as.numeric(igraph::distances(g,
-                                                               v = root,
-                                                               to = V(g)))
-                tau_j <- dist_mat_nodes
+                # Obtain final pseudotimes
+                tau_j <- get_node_pseudotime(UpdatedPG$NodePositions,
+                                             mean_age_j,
+                                             UpdatedPG$ElasticMatrix)
                 
                 
-                print(names(mean_list))
-                print(as.numeric(mean_list))
-                print(tau_j)
+                #print(names(mean_list))
+                #print(as.numeric(mean_list))
+                #print(tau_j)
                 out <- list(NodePositions = UpdatedPG$NodePositions, ElasticMatrix = UpdatedPG$ElasticMatrix,
                             ReportTable = ReportTable, FinalReport = FinalReport, Lambda = Lambda, Mu = Mu,
                             FastSolve = FastSolve, Mode = Mode, MaxNumberOfIterations = MaxNumberOfIterations,
@@ -1795,26 +1710,227 @@ ElPrincGraph_edit <- function(X,
         
 }
 
+ReportOnPrimitiveGraphEmbedment_edit <- function(X,
+                                                 NodePositions,
+                                                 ElasticMatrix,
+                                                 PartData=NULL,
+                                                 ComputeMSEP = FALSE,
+                                                 age_vec,
+                                                 eta) {
+        
+        # %   This function computes various measurements concerning a primitive
+        # %   graph embedment
+        # %
+        # %           BARCODE is barcode in form ...S4|S3||N, where N is number of
+        # %               nodes, S3 is number of 3-stars, S4 (S5,...) is number of
+        # %               four (five,...) stars, etc.
+        # %           ENERGY is total elastic energy of graph embedment (ENERGY = MSE + UE +
+        #                                                                  %               UR)
+        # %           NNODES is number of nodes.
+        # %           NEDGES is number of edges
+        # %           NRIBS is number of two stars (nodes with two otherr connected
+        #                                           %               nodes).
+        # %           NSTARS is number of stars with 3 and more leaves (nodes
+        #                                                               %               connected with central node).
+        # %           NRAYS2 is sum of rays minus doubled number of nodes.
+        # %           MSE is mean square error or assessment of data approximation
+        # %               quality.
+        # %           MSEP is mean square error after piece-wise linear projection on the edges
+        # %           FVE is fraction of explained variance. This value always
+        # %               between 0 and 1. Greater value means higher quality of
+        # %               data approximation.
+        # %           FVEP is same as FVE but computed after piece-wise linear projection on the edges
+        # %           UE is total sum of squared edge lengths.
+        # %           UR is total sum of star deviations from harmonicity.
+        # %           URN is UR * nodes
+        # %           URN2 is UR * nodes^2
+        # %           URSD is standard deviation of UR???
+        
+        Mu = diag(ElasticMatrix)
+        L = ElasticMatrix - diag(Mu)
+        Connectivities <- colSums(L>0)
+        N <- table(factor(Connectivities, levels = 1:max(Connectivities)))
+        DecodedMat <- DecodeElasticMatrix(ElasticMatrix)
+        
+        TotalVariance = sum(apply(X, 2, var))
+        
+        BARCODE = getPrimitiveGraphStructureBarCode(ElasticMatrix)
+        
+        if(is.null(PartData)){
+                PartData <- PartitionData(X = X, NodePositions = NodePositions, rowSums(X^2))
+        }
+        
+        target_position <- get_target_positions(NodePositions,
+                                                PartData$Partition,
+                                                age_vec,
+                                                ElasticMatrix)
+        Energies <- distutils::ElasticEnergy(X = X, NodePositions = NodePositions,
+                                             ElasticMatrix = ElasticMatrix,
+                                             Dists = PartData$Dists,
+                                             partition = PartData$Partition,
+                                             NodeAgeTargets = target_position,
+                                             eta = eta)
+        
+        NNODES = nrow(NodePositions)
+        NEDGES = nrow(DecodedMat$Edges)
+        
+        
+        if(length(N)>1){
+                NRIBS = N[2]
+        } else{
+                NRIBS = 0
+        }
+        
+        if(length(N)>2){
+                NSTARS = N[3]
+        } else {
+                NSTARS = 0
+        }
+        
+        NRAYS = 0
+        NRAYS2 = 0
+        
+        
+        if(ComputeMSEP){
+                NodeProj <- project_point_onto_graph(X, NodePositions = NodePositions,
+                                                     Edges = DecodedMat$Edges, Partition = PartData$Partition)
+                MSEP = NodeProj$MSEP
+                FVEP = (TotalVariance-MSEP)/TotalVariance
+        } else {
+                MSEP = NA
+                FVEP = NA
+        }
+        
+        FVE = (TotalVariance-Energies$MSE)/TotalVariance
+        URN = Energies$RP*NNODES
+        URN2 = Energies$RP*NNODES*NNODES
+        URSD = 0
+        
+        return(list(BARCODE = BARCODE, ENERGY = Energies$ElasticEnergy, NNODES = NNODES, NEDGES = NEDGES,
+                    NRIBS = NRIBS, NSTARS = NSTARS, NRAYS = NRAYS, NRAYS2 = NRAYS2,
+                    MSE = Energies$MSE, MSEP = MSEP, FVE = FVE, FVEP = FVEP, UE = Energies$EP, UR = Energies$RP,
+                    URN = URN, URN2 = URN2, URSD = URSD))
+        
+        
+}
+
+# Given a node matrix, a partition vector and an age vector, compute mean
+# age per node.
+get_node_meanage <- function(nodes_mat, assignment, age_vec){
+        K <- nrow(nodes_mat)
+        
+        ## counts and means
+        fac <- factor(as.integer(assignment), levels = seq_len(K))
+        n_j_tab <- table(fac)
+        n_j <- integer(K)
+        n_j[as.integer(names(n_j_tab))] <- as.integer(n_j_tab)
+        mean_age_j <- rep(NA_real_, K)
+        if(length(n_j_tab)>0){
+                mean_list <- tapply(age_vec, assignment, mean)
+                if(length(mean_list)>0){
+                        idxs <- as.integer(names(mean_list))
+                        mean_age_j[idxs] <- as.numeric(mean_list)
+                }
+        }
+        return(mean_age_j)
+}
+
+# Given the elastic matrix and the nodes matrix, obtain an igraph graph object.
+get_node_graph <- function(nodes_mat, ElasticMatrix){
+        # Obtain decoded elastic matrix and
+        # extract edges.
+        dec_elMat <- ElPiGraph.R::DecodeElasticMatrix(ElasticMatrix)
+        edgs <- dec_elMat$Edges
+        # Obtain weights based on Euclidean
+        # dists
+        edge_dists <- sqrt(rowSums((nodes_mat[edgs[, 2], , drop = F] - nodes_mat[edgs[, 1], , drop = F])^2))
+        edge_weights <- 1 / (1 + edge_dists)
+        g <- igraph::graph_from_edgelist(edgs, directed = F)
+        E(g)$weight <- edge_weights
+        return (g)
+}
+
+# Computes pseudotime of nodes by extracting the graph, starting from the
+# leaf with the lowest mean age.
+get_node_pseudotime <- function(nodes_mat, mean_age, ElasticMatrix){
+        K <- nrow(nodes_mat)
+        tau_j <- rep(NA_real_, K)
+        if(K > 1){
+                g <- get_node_graph(nodes_mat, ElasticMatrix)
+                # identify leaves and assign root to 
+                # leaf with minimum age
+                degs <- igraph::degree(g)
+                leaves <- which(degs == 1)
+                root <- NA_integer_
+                if(length(leaves) > 0 && any(!is.na(mean_age[leaves]))){
+                        root <- leaves[which.min(mean_age[leaves])]
+                } else if(any(!is.na(mean_age))){
+                        root <- which.min(mean_age)
+                } else {
+                        root <- 1L
+                }
+                dist_mat_nodes <- as.numeric(igraph::distances(g, v = root, to = V(g)))
+                tau_j <- dist_mat_nodes
+        } else {
+                tau_j <- 0
+        }
+        return(tau_j)
+}
+
+# Get target node positions based on an isotonic regression on age vs pseudotime
+get_target_positions <- function(nodes_mat, assignment, age_vec, ElasticMatrix){
+        K <- nrow(nodes_mat)
+        D <- ncol(nodes_mat)
+        
+        mean_age_j <- get_node_meanage(nodes_mat, assignment, age_vec)
+        
+        tau_j <- get_node_pseudotime(nodes_mat, mean_age_j, ElasticMatrix)
+        
+        
+        ok <- !is.na(mean_age_j) & !is.na(tau_j)
+        if(sum(ok) >= 2){
+                iso_fit <- stats::isoreg(mean_age_j[ok], tau_j[ok])
+                r_ok <- iso_fit$yf
+                r_j <- rep(NA_real_, K)
+                r_j[which(ok)] <- r_ok
+                r_j[is.na(r_j)] <- tau_j[is.na(r_j)]
+        } else {
+                r_j <- tau_j
+        }
+        
+        # interpolate per dimension
+        ord <- order(tau_j)
+        tau_ord <- tau_j[ord]
+        nodes_ord <- nodes_mat[ord, , drop = FALSE]
+        pos_target <- matrix(NA_real_, nrow = K, ncol = D)
+        for(dimc in seq_len(D)){
+                col_vals <- nodes_ord[, dimc]
+                interp_vals <- stats::approx(x = tau_ord, y = col_vals, xout = r_j, rule = 2)$y
+                pos_target[, dimc] <- interp_vals[order(order(tau_j))]  # keep original index order
+        }
+        return (pos_target)
+}
+
 
 PrimitiveElasticGraphEmbedment_edit <- function(X,
-                                           NodePositions,
-                                           ElasticMatrix,
-                                           MaxNumberOfIterations,
-                                           TrimmingRadius,
-                                           eps,
-                                           Mode = 1,
-                                           FinalEnergy = "Base",
-                                           SquaredX = NULL,
-                                           verbose = FALSE,
-                                           FastSolve = FALSE,
-                                           DisplayWarnings = FALSE,
-                                           alpha = 0,
-                                           beta = 0,
-                                           gamma = 0,
-                                           prob = 1,
-                                           ## NEW:
-                                           age_vec = NULL,
-                                           eta = 1e-3) {
+                                                NodePositions,
+                                                ElasticMatrix,
+                                                MaxNumberOfIterations,
+                                                TrimmingRadius,
+                                                eps,
+                                                Mode = 1,
+                                                FinalEnergy = "Base",
+                                                SquaredX = NULL,
+                                                verbose = FALSE,
+                                                FastSolve = FALSE,
+                                                DisplayWarnings = FALSE,
+                                                alpha = 0,
+                                                beta = 0,
+                                                gamma = 0,
+                                                prob = 1,
+                                                ## NEW:
+                                                age_vec = NULL,
+                                                eta = 1e-3) {
         
         # Minimal argument checks
         if(!is.matrix(X)) X <- data.matrix(X)
@@ -1837,12 +1953,20 @@ PrimitiveElasticGraphEmbedment_edit <- function(X,
                                         TrimmingRadius = TrimmingRadius)
         assignment <- PartDataStruct$Partition
         
+        target_positions <- get_target_positions(NodePositions,
+                                                 assignment,
+                                                 age_vec,
+                                                 ElasticMatrix)
+        
         if(verbose | Mode == 2){
                 OldPriGrElEn <-
                         distutils::ElasticEnergy(X = X,
                                                  NodePositions = NodePositions,
                                                  ElasticMatrix = ElasticMatrix,
-                                                 Dists = PartDataStruct$Dists)
+                                                 Dists = PartDataStruct$Dists,
+                                                 partition = assignment,
+                                                 NodeAgeTargets = target_positions,
+                                                 eta = eta)
         } else {
                 OldPriGrElEn <- list(ElasticEnergy = NA, MSE = NA, EP = NA, RP = NA)
         }
@@ -1858,101 +1982,14 @@ PrimitiveElasticGraphEmbedment_edit <- function(X,
                         PriGrElEn <- OldPriGrElEn
                         difference <- NA
                         
-                        NewNodePositions <- distutils::FitGraph2DataGivenPartition(X = X,
+                        NewNodePositions <- distutils::FitGraph2DataGivenPartition_Age(X = X,
                                                                                    PointWeights = PointWeights,
                                                                                    NodePositions = NodePositions,
                                                                                    SpringLaplacianMatrix = SpringLaplacianMatrix,
                                                                                    partition = PartDataStruct$Partition,
-                                                                                   FastSolve = FastSolve)
-                        
-                        # Apply age isotonic proximal update once (if age_vec provided)
-                        if(!is.null(age_vec)){
-                                # follow same proximal update as in the loop below
-                                nodes_mat <- NewNodePositions
-                                K <- nrow(nodes_mat); D <- ncol(nodes_mat)
-                                assignment <- PartDataStruct$Partition
-                                
-                                ## counts and means
-                                fac <- factor(as.integer(assignment), levels = seq_len(K))
-                                n_j_tab <- table(fac)
-                                n_j <- integer(K)
-                                n_j[as.integer(names(n_j_tab))] <- as.integer(n_j_tab)
-                                mean_age_j <- rep(NA_real_, K)
-                                if(length(n_j_tab)>0){
-                                        mean_list <- tapply(age_vec, assignment, mean)
-                                        if(length(mean_list)>0){
-                                                idxs <- as.integer(names(mean_list))
-                                                mean_age_j[idxs] <- as.numeric(mean_list)
-                                        }
-                                }
-                                
-                                # compute pseudotime tau_j using MST of nodes
-                                tau_j <- rep(NA_real_, K)
-                                if(K > 1){
-                                        # Obtain decoded elastic matrix and
-                                        # extract edges.
-                                        dec_elMat <- ElPiGraph.R::DecodeElasticMatrix(ElasticMatrix)
-                                        edgs <- dec_elMat$Edges
-                                        # Obtain weights based on Euclidean
-                                        # dists
-                                        edge_dists <- sqrt(rowSums((nodes_mat[edgs[, 2], , drop = F] - nodes_mat[edgs[, 1], , drop = F])^2))
-                                        edge_weights <- 1 / (1 + edge_dists)
-                                        #dnodes <- 1 / (1 + as.matrix(stats::dist(nodes_mat)))
-                                        g <- igraph::graph_from_edgelist(edgs, directed = F)
-                                        E(g)$weight <- edge_weights
-                                        #mst_g <- igraph::mst(g_full, weights = igraph::E(g_full)$weight)
-                                        # identify leaves and assign root to 
-                                        # leaf with minimum age
-                                        degs <- igraph::degree(g)
-                                        leaves <- which(degs == 1)
-                                        root <- NA_integer_
-                                        if(length(leaves) > 0 && any(!is.na(mean_age_j[leaves]))){
-                                                root <- leaves[which.min(mean_age_j[leaves])]
-                                        } else if(any(!is.na(mean_age_j))){
-                                                root <- which.min(mean_age_j)
-                                        } else {
-                                                root <- 1L
-                                        }
-                                        dist_mat_nodes <- as.numeric(igraph::distances(g, v = root, to = V(g)))
-                                        tau_j <- dist_mat_nodes
-                                } else {
-                                        tau_j <- 0
-                                }
-                                
-                                ok <- !is.na(mean_age_j) & !is.na(tau_j)
-                                if(sum(ok) >= 2){
-                                        iso_fit <- stats::isoreg(tau_j[ok], mean_age_j[ok])
-                                        iso_fit <- stats::isoreg(mean_age_j[ok], tau_j[ok])
-                                        r_ok <- iso_fit$yf
-                                        r_j <- rep(NA_real_, K)
-                                        r_j[which(ok)] <- r_ok
-                                        r_j[is.na(r_j)] <- tau_j[is.na(r_j)]
-                                } else {
-                                        r_j <- tau_j
-                                }
-                                
-                                # interpolate per dimension
-                                ord <- order(tau_j)
-                                tau_ord <- tau_j[ord]
-                                nodes_ord <- nodes_mat[ord, , drop = FALSE]
-                                pos_target <- matrix(NA_real_, nrow = K, ncol = D)
-                                for(dimc in seq_len(D)){
-                                        col_vals <- nodes_ord[, dimc]
-                                        interp_vals <- stats::approx(x = tau_ord, y = col_vals, xout = r_j, rule = 2)$y
-                                        pos_target[, dimc] <- interp_vals[order(order(tau_j))]  # keep original index order
-                                }
-                                # Note: the previous line ensures pos_target[j,] corresponds to node j.
-                                
-                                # proximal update
-                                for(j in seq_len(K)){
-                                        nj <- ifelse(j <= length(n_j), n_j[j], 0)
-                                        if(nj > 0 && !any(is.na(pos_target[j, ]))){
-                                                denom <- 1 + eta * nj
-                                                NewNodePositions[j, ] <- (NewNodePositions[j, ] + eta * nj * pos_target[j, ]) / denom
-                                        }
-                                }
-                        }
-                        
+                                                                                   FastSolve = FastSolve,
+                                                                                   NodeAgeTargets = target_positions,
+                                                                                   eta = eta)
                         break()
                 } # end MaxNumberOfIterations==0 case
                 
@@ -1962,112 +1999,42 @@ PrimitiveElasticGraphEmbedment_edit <- function(X,
                         while(sum(SelPoint) < min(3, nrow(X))){
                                 SelPoint[ceiling(runif(1, min = 1, max = nrow(X)))] <- TRUE
                         }
-                        NewNodePositions <- distutils::FitGraph2DataGivenPartition(X = X[SelPoint, ],
-                                                                                   PointWeights = PointWeights,
-                                                                                   NodePositions = NodePositions,
-                                                                                   SpringLaplacianMatrix = SpringLaplacianMatrix,
-                                                                                   partition = PartDataStruct$Partition,
-                                                                                   FastSolve = FastSolve)
+                        NewNodePositions <- distutils::FitGraph2DataGivenPartition_Age(X = X[SelPoint, ],
+                                                                                       PointWeights = PointWeights,
+                                                                                       NodePositions = NodePositions,
+                                                                                       SpringLaplacianMatrix = SpringLaplacianMatrix,
+                                                                                       partition = PartDataStruct$Partition[SelPoint],
+                                                                                       FastSolve = FastSolve,
+                                                                                       NodeAgeTargets = target_positions,
+                                                                                       eta = eta)
                 } else {
-                        NewNodePositions <- distutils::FitGraph2DataGivenPartition(X = X,
-                                                                                   PointWeights = PointWeights,
-                                                                                   NodePositions = NodePositions,
-                                                                                   SpringLaplacianMatrix = SpringLaplacianMatrix,
-                                                                                   partition = PartDataStruct$Partition,
-                                                                                   FastSolve = FastSolve)
+                        NewNodePositions <- distutils::FitGraph2DataGivenPartition_Age(X = X,
+                                                                                       PointWeights = PointWeights,
+                                                                                       NodePositions = NodePositions,
+                                                                                       SpringLaplacianMatrix = SpringLaplacianMatrix,
+                                                                                       partition = PartDataStruct$Partition,
+                                                                                       FastSolve = FastSolve,
+                                                                                       NodeAgeTargets = target_positions,
+                                                                                       eta = eta)
                 }
                 
-                ## --- AGE-ISOTONIC PROXIMAL AUGMENTATION (if age_vec provided) ---
-                if(!is.null(age_vec)){
-                        nodes_mat <- NewNodePositions
-                        K <- nrow(nodes_mat)
-                        D <- ncol(nodes_mat)
-                        assignment <- PartDataStruct$Partition
-                        
-                        # compute counts and mean age per node
-                        fac <- factor(as.integer(assignment), levels = seq_len(K))
-                        n_j_tab <- table(fac)
-                        n_j <- integer(K); n_j[as.integer(names(n_j_tab))] <- as.integer(n_j_tab)
-                        mean_age_j <- rep(NA_real_, K)
-                        if(length(n_j_tab)>0){
-                                mean_list <- tapply(age_vec, assignment, mean)
-                                if(length(mean_list)>0){
-                                        idxs <- as.integer(names(mean_list))
-                                        mean_age_j[idxs] <- as.numeric(mean_list)
-                                }
-                        }
-                        
-                        # compute pseudotime tau_j using graph of nodes
-                        tau_j <- rep(NA_real_, K)
-                        if(K > 1){
-                                # Obtain decoded elastic matrix and
-                                # extract edges.
-                                dec_elMat <- ElPiGraph.R::DecodeElasticMatrix(ElasticMatrix)
-                                edgs <- dec_elMat$Edges
-                                # Obtain weights based on Euclidean
-                                # dists
-                                edge_dists <- sqrt(rowSums((nodes_mat[edgs[, 2], , drop = F] - nodes_mat[edgs[, 1], , drop = F])^2))
-                                edge_weights <- 1 / (1 + edge_dists)
-                                g <- igraph::graph_from_edgelist(edgs, directed = F)
-                                E(g)$weight <- edge_weights
-                                # identify leaves and assign root to 
-                                # leaf with minimum age
-                                degs <- igraph::degree(g)
-                                leaves <- which(degs == 1)
-                                root <- NA_integer_
-                                if(length(leaves) > 0 && any(!is.na(mean_age_j[leaves]))){
-                                        root <- leaves[which.min(mean_age_j[leaves])]
-                                } else if(any(!is.na(mean_age_j))){
-                                        root <- which.min(mean_age_j)
-                                } else {
-                                        root <- 1L
-                                }
-                                dist_mat_nodes <- as.numeric(igraph::distances(g, v = root, to = V(g)))
-                                tau_j <- dist_mat_nodes
-                        } else {
-                                tau_j <- 0
-                        }
-                        
-                        ok <- !is.na(mean_age_j) & !is.na(tau_j)
-                        if(sum(ok) >= 2){
-                                iso_fit <- stats::isoreg(mean_age_j[ok], tau_j[ok])
-                                r_ok <- iso_fit$yf
-                                r_j <- rep(NA_real_, K)
-                                r_j[which(ok)] <- r_ok
-                                r_j[is.na(r_j)] <- tau_j[is.na(r_j)]
-                        } else {
-                                r_j <- tau_j
-                        }
-                        
-                        # interpolate target positions along backbone — interpolate per dimension
-                        ord <- order(tau_j)
-                        tau_ord <- tau_j[ord]
-                        nodes_ord <- nodes_mat[ord, , drop = FALSE]
-                        pos_target <- matrix(NA_real_, nrow = K, ncol = D)
-                        for(dimc in seq_len(D)){
-                                col_vals <- nodes_ord[, dimc]
-                                interp_vals <- stats::approx(x = tau_ord, y = col_vals, xout = r_j, rule = 2)$y
-                                # interp_vals corresponds to ordered nodes; place back in original node order:
-                                pos_target[ord, dimc] <- interp_vals
-                        }
-                        
-                        # proximal update: (Y + eta * n_j * pos_target) / (1 + eta * n_j)
-                        for(j in seq_len(K)){
-                                nj <- ifelse(j <= length(n_j), n_j[j], 0)
-                                if(nj > 0 && !any(is.na(pos_target[j, ]))){
-                                        denom <- 1 + eta * nj
-                                        NewNodePositions[j, ] <- (NewNodePositions[j, ] + eta * nj * pos_target[j, ]) / denom
-                                }
-                        }
-                }
-                ## --- end augmentation ---
+                PartDataStruct <- PartitionData(X = X, NodePositions = NewNodePositions, SquaredX = SquaredX,
+                                                TrimmingRadius = TrimmingRadius)
+                assignment <- PartDataStruct$Partition
                 
+                target_positions <- get_target_positions(NewNodePositions,
+                                                         assignment,
+                                                         age_vec,
+                                                         ElasticMatrix)
                 # Compute energy if requested
                 if(verbose | Mode == 2){
                         PriGrElEn <- distutils::ElasticEnergy(X = X,
                                                               NodePositions = NewNodePositions,
                                                               ElasticMatrix =  ElasticMatrix,
-                                                              Dists = PartDataStruct$Dists)
+                                                              Dists = PartDataStruct$Dists,
+                                                              partition = assignment,
+                                                              NodeAgeTargets = target_positions,
+                                                              eta = eta)
                 } else {
                         PriGrElEn <- list(ElasticEnergy = NA, MSE = NA, EP = NA, RP = NA)
                 }
@@ -2093,8 +2060,8 @@ PrimitiveElasticGraphEmbedment_edit <- function(X,
                         break()
                 } else {
                         if(i < MaxNumberOfIterations){
-                                PartDataStruct <- PartitionData(X = X, NodePositions = NewNodePositions, SquaredX = SquaredX,
-                                                                TrimmingRadius = TrimmingRadius)
+                                #PartDataStruct <- PartitionData(X = X, NodePositions = NewNodePositions, SquaredX = SquaredX,
+                                #                                TrimmingRadius = TrimmingRadius)
                                 NodePositions <- NewNodePositions
                                 OldPriGrElEn <- PriGrElEn
                         }
@@ -2114,7 +2081,10 @@ PrimitiveElasticGraphEmbedment_edit <- function(X,
                                 distutils::ElasticEnergy(X = X,
                                                          NodePositions = NewNodePositions,
                                                          ElasticMatrix =  ElasticMatrix,
-                                                         Dists = PartDataStruct$Dists)
+                                                         Dists = PartDataStruct$Dists,
+                                                         partition = assignment,
+                                                         NodeAgeTargets = target_positions,
+                                                         eta = eta)
                 }
                 if(FinalEnergy == "Penalized"){
                         PriGrElEn <-
@@ -2122,8 +2092,11 @@ PrimitiveElasticGraphEmbedment_edit <- function(X,
                                                                   NodePositions =  NewNodePositions,
                                                                   ElasticMatrix = ElasticMatrix,
                                                                   Dists = PartDataStruct$Dists,
+                                                                  partition = assignment,
+                                                                  NodeAgeTargets = target_positions,
                                                                   alpha = alpha,
-                                                                  beta = beta)
+                                                                  beta = beta,
+                                                                  eta = eta)
                 }
         }
         
@@ -2135,268 +2108,60 @@ PrimitiveElasticGraphEmbedment_edit <- function(X,
                     RP = PriGrElEn$RP))
 }
 
-#tree_samps_cust <- computeElasticPrincipalTree_edit(X,
-#                                                    NumNodes = length(unique(cellsort$cell_metadata[, donor_ids_in])) * 2,
-#                                                    Lambda = 0.03, Mu = 0.01, age_vec = cellsort$cell_metadata$age, Do_PCA = F,
-#                                                    eta = 0.01,
-#                                                    FastSolve = T)
 
-#saveRDS(tree_samps_cust, file = sprintf("%stree_samp_cust.rds", outDir))
+# Create input matrices
+################################################################################
 
-#idx <- sample(nrow(X), 5000)
-#trimGuess <- InferTrimRadius(X = X[idx, ], nPoints = 5000)
+cellsort <- create_cellsort_obj(seur = seur, cell_ids_in = cell_ids_in, target_cell = target_cell, n_var_features = 5000)
+cellsort_toy <- create_cellsort_obj(seur = seur_toy, cell_ids_in = cell_ids_in_toy, target_cell = target_cell_toy, shiftlog = F)
 
-#PrimitiveElasticGraphEmbedment(X, NodePositions = NodesPositions,
-#                               ElasticMatrix = ElasticMatrix,
-#                               MaxNumberOfIterations = MaxNumberOfIterations,
-#                               TrimmingRadius = TrimmingRadius,
-#                               eps = eps,
-#                               Mode = 1,
-#                               age_vec = seur@meta.data$age)
+start_time <- Sys.time()
+x_pca <- irlba::prcomp_irlba(Matrix::t(cellsort$cell_expr), n = 100)
+end_time <- Sys.time()
+elapsed <- round(as.numeric(end_time - start_time, units = "mins"), digits = 3)
+print(sprintf("PCA done. %s minutes elapsed", elapsed))
 
-#out_elpi_edit <- ElPrincGraph_edit(X = X, NumNodes = NumNodes, NumEdges = NumEdges, Lambda = Lambda, Mu = Mu,
-#                                   MaxNumberOfIterations = MaxNumberOfIterations, eps = eps, TrimmingRadius = TrimmingRadius,
-#                                   NodesPositions = InitNodePositions, ElasticMatrix = InitElasticMatrix, AdjustVect = AdjustVect,
-#                                   CompileReport = TRUE, ShowTimer = ShowTimer,
-#                                   FinalEnergy = FinalEnergy, alpha = alpha, beta = beta, gamma = gamma, Mode = Mode,
-#                                   GrowGrammars = GrowGrammars, ShrinkGrammars = ShrinkGrammars,
-#                                  GrammarOptimization = GrammarOptimization, MaxSteps = MaxSteps, GrammarOrder = GrammarOrder,
-#                                   ComputeMSEP = ComputeMSEP, n.cores = n.cores, ClusType = ClusType, MinParOP = MinParOP,
-#                                   verbose = verbose, FastSolve = FastSolve, AvoidSolitary = AvoidSolitary,
-#                                   EmbPointProb = EmbPointProb, AdjustElasticMatrix = AdjustElasticMatrix,
-#                                   AdjustElasticMatrix.Initial = AdjustElasticMatrix.Initial, age_vec = age_vec, eta = .01)
+X <- x_pca$x
 
-#plot(out_elpi_edit$NodePositions[, 1], out_elpi_edit$NodePositions[, 2])
-#plot(out_elpi_edit$g)
-#plot(out_elpi_edit$age_tau$average_age, out_elpi_edit$age_tau$pseudotime)
+X <- X[, order(abs(apply(x_pca$x,
+                         2,
+                         function(x) cor(x,
+                                         cellsort$cell_metadata$age))), decreasing = T)[1:10]]
 
-
-#out_elpi_edit_noage <- ElPrincGraph_edit(X = X,
-#                                         NumNodes = length(unique(seur@meta.data[, donor_ids_in])),
-#                                         NumEdges = Inf,
-#                                         Lambda = 0.03,
-#                                         Mu = 0,01,
-#                                         MaxNumberOfIterations = 10,
-#                                         eps = eps,
-#                                         TrimmingRadius = Inf,
-#                                         NodesPositions = InitNodePositions, ElasticMatrix = InitElasticMatrix, AdjustVect = AdjustVect,
-#                                   CompileReport = TRUE, ShowTimer = ShowTimer,
-#                                   FinalEnergy = FinalEnergy, alpha = alpha, beta = beta, gamma = gamma, Mode = Mode,
-#                                   GrowGrammars = GrowGrammars, ShrinkGrammars = ShrinkGrammars,
-#                                   GrammarOptimization = GrammarOptimization, MaxSteps = MaxSteps, GrammarOrder = GrammarOrder,
-#                                   ComputeMSEP = ComputeMSEP, n.cores = n.cores, ClusType = ClusType, MinParOP = MinParOP,
-#                                   verbose = verbose, FastSolve = FastSolve, AvoidSolitary = AvoidSolitary,
-#                                   EmbPointProb = EmbPointProb, AdjustElasticMatrix = AdjustElasticMatrix)
+X_toy <- as.matrix(Matrix::t(cellsort_toy$cell_expr))
+age_vec_toy <- cellsort_toy$cell_metadata$age
 
 
 
-InferTrimRadius_edit <- function (X, nPoints = NULL, nInt = 100, plotCurves = FALSE, 
-                                  n.cores = 1, ClusType = "FORK") 
-{
-        #X <- TD_LowNoise
-        #nPoints <- round(nrow(TD_LowNoise)/2)
-        #nInt = 100
-        #plotCurves = FALSE
-        #n.cores = 1
-        #ClusType = "FORK"
-        
-        
-        if (is.null(nPoints)) {
-                nPoints <- nrow(X)
-        }
-        if (nPoints > nrow(X)) {
-                nPoints <- nrow(X)
-        }
-        SquaredX <- rowSums(X^2)
-        Dist <- distutils::PartialDistance(Ar = X, Br = X)
-        RealDists <- Dist[upper.tri(Dist, diag = FALSE)]
-        boxplot(RealDists)
-        Dist.l <- min(RealDists)
-        Dist.m <- max(RealDists)
-        DVect <- Dist.m * (2^seq(from = 0.01, by = 10/nInt, to = 10))/512
-        RDSMat <- sapply(sample(1:nrow(X), nPoints), function(Idx) {
-                distutils::RadialCount(X[-Idx, ], X[Idx, ], SquaredAr = SquaredX[-Idx], 
-                                       DVect = DVect)$PCount
-        })
-        par(mfrow = c(3, 3))
-        ComputeFunction <- function(v, DVect, Dist.m, plotCurves) {
-                t.df <- data.frame(x = log2(512 * DVect/Dist.m), y = log2(v + 
-                                                                                  1))
-                t.df <- t.df[v > 2, ]
-                if (plotCurves) {
-                        plot(t.df$x, t.df$y)
-                }
-                piecewiseModel <- NULL
-                tryCatch({
-                        piecewiseModel <- segmented::segmented(lm(y ~ x, 
-                                                                  data = t.df), seg.Z = ~x, psi = quantile(t.df$x, 
-                                                                                                           c(0.01, 0.25, 0.75)))
-                }, error = function(e) {
-                        print("Error in segmentation ... skipping")
-                        return(NULL)
-                })
-                
-                if (!is.null(piecewiseModel) && "psi" %in% names(piecewiseModel)) {
-                        ci <- segmented::confint.segmented(piecewiseModel)
-                        Points <- ci[, 1]
-                        if (plotCurves) {
-                                abline(v = Points)
-                        }
-                        return(Points)
-                } else {
-                        print("Segmentation failed — using fallback (no breakpoints).")
-                        Points <- NA
-                }
-        }
-        if (n.cores > 1) {
-                if (ClusType == "FORK") {
-                        cl <- parallel::makeForkCluster(n.cores)
-                }
-                else {
-                        cl <- parallel::makePSOCKcluster(n.cores)
-                }
-                PTs <- parallel::parApply(cl, RDSMat, 2, ComputeFunction, 
-                                          DVect = DVect, Dist.m = Dist.m, plotCurves = FALSE)
-                parallel::stopCluster(cl)
-        }else {
-                PTs <- apply(RDSMat, 2, ComputeFunction, DVect = DVect, 
-                             Dist.m = Dist.m, plotCurves = plotCurves)
-                #for (i in 1:ncol(RDSMat)){
-                #        print(i)
-                #        ComputeFunction(v = RDSMat[, i],
-                #                        DVect = DVect,
-                #                        Dist.m = Dist.m,
-                #                        plotCurves = plotCurves)
-                #}
-        }
-        par(mfrow = c(1, 1))
-        if (is.list(PTs)) {
-                PTs <- PTs[!sapply(PTs, is.null)]
-                PTs <- do.call(rbind, PTs)
-                PTs <- t(PTs)
-        }
-        InfData <- Dist.m * (PTs[1, ]^2)/512
-        boxplot(InfData)
-        return(InfData)
-}
+# Do the tree
+################################################################################
 
-#idx <- sample(nrow(X), 5000)
+tree_toy <- computeElasticPrincipalTree_edit(X_toy,
+                                             NumNodes = 19,
+                                             Lambda = 0.03, Mu = 0.01,
+                                             age_vec = cellsort_toy$cell_metadata$age,
+                                             Do_PCA = F,
+                                             eta = 0.5,
+                                             FastSolve = T,
+                                             MaxNumberOfIterations = 100)
 
-#TrimGuess <- InferTrimRadius_edit(X = X[idx, ], nPoints = 5000)
+plot(tree_toy[[1]]$age_tau$pseudotime, tree_toy[[1]]$age_tau$average_age)
 
+cor(tree_toy[[1]]$age_tau$pseudotime,
+    tree_toy[[1]]$age_tau$average_age)
 
-tree_samps_cust_wRadius <- computeElasticPrincipalTree_edit(as.matrix(X),
-                                                            #NumNodes = length(unique(cellsort$cell_metadata[, donor_ids_in])),
-                                                            NumNodes = 15,
-                                                            Lambda = 0.03, Mu = 0.01, age_vec = cellsort$cell_metadata$age, Do_PCA = F,
-                                                            eta = 0.01,
-                                                            FastSolve = T,#,
-                                                            #TrimmingRadius = 20,
-                                                            #ICOver = "Density",
-                                                            #DensityRadius = 20
-                                                            MaxNumberOfIterations = 100)
+plot(tree_toy[[1]]$NodePositions[, 1],
+     tree_toy[[1]]$NodePositions[, 2])
 
-saveRDS(tree_samps_cust_wRadius, file = sprintf("%stree_samp_cust_wRadius_wAge.rds", outDir))
+tree_real <- computeElasticPrincipalTree_edit(X,
+                                              NumNodes = 15,
+                                              Lambda = 0.03, Mu = 0.01,
+                                              age_vec = cellsort$cell_metadata$age,
+                                              Do_PCA = F,
+                                              eta = 0.5,
+                                              FastSolve = T,
+                                              MaxNumberOfIterations = 100)
 
-plot(tree_samps_cust_wRadius[[1]]$NodePositions[, 1],
-     tree_samps_cust_wRadius[[1]]$NodePositions[, 2])
-
-plot(tree_samps_cust_wRadius[[1]]$age_tau$pseudotime, tree_samps_cust_wRadius[[1]]$age_tau$average_age)
-cor(tree_samps_cust_wRadius[[1]]$age_tau$pseudotime[!is.na(tree_samps_cust_wRadius[[1]]$age_tau$average_age)],
-    tree_samps_cust_wRadius[[1]]$age_tau$average_age[!is.na(tree_samps_cust_wRadius[[1]]$age_tau$average_age)])
-plot(tree_samps_cust_wRadius[[1]]$g)
-
-ElPiGraph.R::PlotPG(X = X, TargetPG = tree_samps_cust_wRadius[[1]],
-                    DimToPlot = 1:2)
-
-ElPiGraph.R::PlotPG(X = X, TargetPG = tree_samps_cust_wRadius[[1]],
-                    DimToPlot = order(abs(apply(x_pca$x, 2,
-                                                function(x) cor(x,
-                                                                cellsort$cell_metadata$age))),
-                                      decreasing = T)[1:2])
-
-age_dims_main_PCs <- tree_samps_cust_wRadius[[1]]$NodePositions[, order(abs(apply(x_pca$x, 2,
-                                                                                  function(x) cor(x,
-                                                                                                  cellsort$cell_metadata$age))),
-                                                                        decreasing = T)[1:2]]
-
-tree_samps_cust_wRadius_noAge <- computeElasticPrincipalTree_edit(as.matrix(X),
-                                                                  #NumNodes = length(unique(cellsort$cell_metadata[, donor_ids_in])),
-                                                            NumNodes = 9,
-                                                            Lambda = 0.03, Mu = 0.01,
-                                                            #age_vec = cellsort$cell_metadata$age,
-                                                            Do_PCA = F,
-                                                            #eta = 0.01,
-                                                            FastSolve = T#,
-                                                            #TrimmingRadius = 20,
-                                                            #ICOver = "Density",
-                                                            #DensityRadius = 20
-                                                            )
-
-
-age_vec <- cellsort$cell_metadata$age
-assignment <- tree_samps_cust_wRadius_noAge[[1]]$partitionData$Partition
-
-## counts and means
-K <- nrow(tree_samps_cust_wRadius_noAge[[1]]$NodePositions)
-fac <- factor(as.integer(assignment), levels = seq_len(K))
-n_j_tab <- table(fac)
-n_j <- integer(K)
-n_j[as.integer(names(n_j_tab))] <- as.integer(n_j_tab)
-mean_age_j <- rep(NA_real_, K)
-if(length(n_j_tab)>0){
-        mean_list <- tapply(age_vec, assignment, mean)
-        if(length(mean_list)>0){
-                idxs <- as.integer(names(mean_list))
-                mean_age_j[idxs] <- as.numeric(mean_list)
-        }
-}
-
-# compute pseudotime tau_j using MST of nodes
-tau_j <- rep(NA_real_, K)
-if(K > 1){
-        # Obtain decoded elastic matrix and
-        # extract edges.
-        #dec_elMat <- ElPiGraph.R::DecodeElasticMatrix(ElasticMatrix)
-        #edgs <- dec_elMat$Edges
-        # Obtain weights based on Euclidean
-        # dists
-        #edge_dists <- sqrt(rowSums((nodes_mat[edgs[, 2], , drop = F] - nodes_mat[edgs[, 1], , drop = F])^2))
-        #edge_weights <- 1 / (1 + edge_dists)
-        #dnodes <- 1 / (1 + as.matrix(stats::dist(nodes_mat)))
-        g <- ElPiGraph.R::ConstructGraph(tree_samps_cust_wRadius_noAge[[1]])
-        #E(g)$weight <- edge_weights
-        #mst_g <- igraph::mst(g_full, weights = igraph::E(g_full)$weight)
-        # identify leaves and assign root to 
-        # leaf with minimum age
-        degs <- igraph::degree(g)
-        leaves <- which(degs == 1)
-        root <- NA_integer_
-        if(length(leaves) > 0 && any(!is.na(mean_age_j[leaves]))){
-                root <- leaves[which.min(mean_age_j[leaves])]
-        } else if(any(!is.na(mean_age_j))){
-                root <- which.min(mean_age_j)
-        } else {
-                root <- 1L
-        }
-        dist_mat_nodes <- as.numeric(igraph::distances(g, v = root, to = V(g)))
-        tau_j <- dist_mat_nodes
-} else {
-        tau_j <- 0
-}
-
-plot(tau_j, mean_age_j)
-
-cor(tau_j, mean_age_j)
-
-saveRDS(tree_samps_cust_wRadius_noAge, file = sprintf("%stree_samp_cust_wRadius_noAge.rds", outDir))
-
-TreeEPG <- computeElasticPrincipalTree(X = TD_LowNoise, NumNodes = 50,
-                                       drawAccuracyComplexity = FALSE, drawEnergy = FALSE, drawPCAView = FALSE,
-                                       n.cores = 1,
-                                       TrimmingRadius = quantile(TrimGuess[!is.na(TrimGuess)], .9),
-                                       ICOver = "Density",
-                                       DensityRadius = quantile(TrimGuess[!is.na(TrimGuess)], .9))
-
-PlotPG(X = TD_LowNoise, TargetPG = TreeEPG[[1]], GroupsLab = TD_LowNoise_Cat,
-       Do_PCA = FALSE, DimToPlot = 1:2)
+plot(tree_real[[1]]$age_tau$pseudotime, tree_real[[1]]$age_tau$average_age)
+cor(tree_real[[1]]$age_tau$pseudotime,
+    tree_real[[1]]$age_tau$average_age)
