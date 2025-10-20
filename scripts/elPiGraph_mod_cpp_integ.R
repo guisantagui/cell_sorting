@@ -2056,7 +2056,7 @@ PrimitiveElasticGraphEmbedment_edit <- function(X,
                 
                 if(difference < eps){
                         Converged <- TRUE
-                        print(sprintf("Converged after %s iterations.", i))
+                        #print(sprintf("Converged after %s iterations.", i))
                         break()
                 } else {
                         if(i < MaxNumberOfIterations){
