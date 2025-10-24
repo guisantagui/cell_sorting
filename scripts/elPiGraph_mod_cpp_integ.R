@@ -1,7 +1,7 @@
 if(!require("devtools")){
         install.packages("devtools")
 }
-if (!require(distutils_agemod, quietly = T)){
+if (!require(distutils, quietly = T)){
         devtools::install_github("guisantagui/distutils_agemod", upgrade = "never")
 }
 library(distutils)
@@ -30,7 +30,7 @@ library(uwot)
 outDir <- "/Users/guillem.santamaria/Documents/postdoc/comput/neurodeg_aging_project/results/cellsort/"
 
 seur_file <- sprintf("%sGSE254569_ctrls_seur.rds", outDir)
-seur_toy_file <- sprintf("%sseur_toy.rds", outDir)
+seur_toy_file <- sprintf("%sseur_synth_one_bifurcation.rds", outDir)
 
 donor_ids_in <- "donor"
 cell_ids_in <- "celltype_final"
@@ -119,6 +119,84 @@ create_cellsort_obj <- function(seur,
                     cell_graph = NULL)
         class(obj) <- "cellsort"
         return(obj)
+}
+
+# Custom functions
+################################################################################
+
+# Computes the projection of a cell vector over all edges, and the distance
+# between a cell vector to the projection (the closest point)
+get_cell_to_edges_dist <- function(cell, centroids_A, centroids_B) {
+        v <- centroids_B - centroids_A
+        u <- matrix(rep(cell, nrow(centroids_A)),
+                    nrow = nrow(centroids_A),
+                    byrow = T) - centroids_A
+        v2 <- rowSums(v^2)
+        t <- rowSums(u * v) / v2
+        t <- pmin(pmax(t, 0), 1)
+        distances <- sqrt(rowSums((u - v * matrix(t, ncol = ncol(v), nrow = length(t), byrow = FALSE))^2))
+        return(data.frame(t = t, distance = distances))
+}
+
+# Given the normalized cell expression matrix, the normalized centroid
+# expression matrix and the edge matrix of the skeleton graph, uses
+# get_cell_to_edge_dist to comput the distances of each cell to each edge
+# and assigns the cell to the edge with the minimum distance. Based on the
+# relative position on the edge and the vector of node pseudotimes, interpolates
+# the pseudotime for the cell.
+get_cell_pseudotime <- function(cell_mat, centroid_mat, edges,
+                                parallelize = F,
+                                cores = NULL,
+                                node_pseudotimes){
+        message("Assigning cells to edges and obtaining cell pseudotimes...")
+        start_time <- Sys.time()
+        
+        
+        
+        centroids_A <- centroid_mat[edges[, 1], ]
+        centroids_B <- centroid_mat[edges[, 2], ]
+        
+        cell_fun <- function(i, node_pseudotimes) {
+                #cell_name <- colnames(cell_mat)[i]
+                cell_vec <- cell_mat[i, ]
+                dists <- get_cell_to_edges_dist(cell_vec,
+                                                centroids_A,
+                                                centroids_B)
+                j <- which.min(dists$distance)
+                out <- data.frame(from = edges[j, 1],
+                                  to = edges[j, 2],
+                                  t = dists$t[j],
+                                  dist = dists$distance[j])
+                cell_pt <- node_pseudotimes[out$from] + ((node_pseudotimes[out$to] - node_pseudotimes[out$from]) * out$t)
+                out$pseudotime <- cell_pt
+                return(out)
+        }
+        if (!parallelize){
+                cell_edge <- list()
+                pb <- txtProgressBar(min = 0, max = nrow(cell_mat), style = 3)
+                for (i in 1:nrow(cell_mat)){
+                        setTxtProgressBar(pb, i)
+                        to_bind <- cell_fun(i, node_pseudotimes)
+                        #cell_pt <- node_pseudotimes[to_bind$from] + ((node_pseudotimes[to_bind$to] - node_pseudotimes[to_bind$from]) * to_bind$t)
+                        cell_edge[[i]] <- to_bind
+                }
+                close(pb)
+        }else{
+                if (is.null(cores)){
+                        cores <- max(1, detectCores() - 1)
+                }
+                cell_edge <- mclapply(seq_len(ncol(cell_mat)),
+                                      cell_fun,
+                                      mc.cores = cores)
+        }
+        cell_edge <- do.call(rbind, cell_edge)
+        end_time <- Sys.time()
+        elapsed <- round(as.numeric(end_time - start_time, units = "mins"),
+                         digits = 3)
+        message(sprintf("Cells have been assigned to edges and pseudotime was computed. %s mins elapsed.",
+                        elapsed))
+        
+        return(cell_edge)
 }
 
 # Mod ElPiGraph.R Funcs
@@ -301,7 +379,15 @@ computeElasticPrincipalGraphWithGrammars_edit <- function(X,
                 } else {
                         print(paste("Creating a sock cluster with", n.cores, "nodes"))
                         cl <- parallel::makeCluster(n.cores)
-                        parallel::clusterExport(cl, varlist = c("X"), envir=environment())
+                        parallel::clusterExport(cl, varlist = c("X",
+                                                                "PrimitiveElasticGraphEmbedment_edit",
+                                                                "ApplyOptimalGraphGrammarOpeation_edit",
+                                                                "ElPrincGraph_edit",
+                                                                "computeElasticPrincipalGraph_edit",
+                                                                "get_target_positions",
+                                                                "get_node_meanage",
+                                                                "get_node_graph",
+                                                                "get_node_pseudotime"), envir=environment())
                 }
         } else {
                 cl = 1
@@ -529,7 +615,8 @@ computeElasticPrincipalGraphWithGrammars_edit <- function(X,
                                                                         "ReduceDimension", "Mode", "FinalEnergy", "alpha", "beta", "gamma",
                                                                         "Intermediate.drawAccuracyComplexity", "Intermediate.drawPCAView", "Intermediate.drawEnergy",
                                                                         "FastSolve", "AvoidSolitary", "EmbPointProb", "AdjustElasticMatrix", "AdjustElasticMatrix.Initial",
-                                                                        "Lambda.Initial", "Mu.Initial"),
+                                                                        "Lambda.Initial", "Mu.Initial",
+                                                                        "PrimitiveElasticGraphEmbedment_edit"),
                                                         envir=environment())
                         }
                         
@@ -1095,10 +1182,10 @@ ApplyOptimalGraphGrammarOpeation_edit <- function(X,
         ElasticMatricesAll <- list()
         AdjustVectAll <- list()
         
-        Partition = ElPiGraph.R::PartitionData(X = X,
-                                               NodePositions = NodePositions,
-                                               SquaredX = SquaredX,
-                                               TrimmingRadius = TrimmingRadius)$Partition
+        Partition = ElPiGraph.R:::PartitionData(X = X,
+                                                NodePositions = NodePositions,
+                                                SquaredX = SquaredX,
+                                                TrimmingRadius = TrimmingRadius)$Partition
         
         for(i in 1:length(operationtypes)){
                 if(verbose){
@@ -1136,10 +1223,10 @@ ApplyOptimalGraphGrammarOpeation_edit <- function(X,
         # Check that each point is associated with at least one point. Otherwise we exclude the configuration
         if(AvoidSolitary){
                 Valid <- sapply(Valid, function(i){
-                        Partition <- ElPiGraph.R::PartitionData(X = X,
-                                                                NodePositions = NodePositionArrayAll[[i]],
-                                                                SquaredX = SquaredX,
-                                                                TrimmingRadius = TrimmingRadius)$Partition
+                        Partition <- ElPiGraph.R:::PartitionData(X = X,
+                                                                 NodePositions = NodePositionArrayAll[[i]],
+                                                                 SquaredX = SquaredX,
+                                                                 TrimmingRadius = TrimmingRadius)$Partition
                         if(all(1:nrow(NodePositionArrayAll[[i]]) %in% Partition)){
                                 return(i)
                         }
@@ -1404,11 +1491,11 @@ ElPrincGraph_edit <- function(X,
                 
                 FinalReport <- ReportOnPrimitiveGraphEmbedment_edit(X = X, NodePositions = UpdatedPG$NodePositions,
                                                                     ElasticMatrix = UpdatedPG$ElasticMatrix,
-                                                                    PartData = PartitionData(X = X,
-                                                                                             NodePositions = UpdatedPG$NodePositions,
-                                                                                             SquaredX = SquaredX,
-                                                                                             TrimmingRadius = TrimmingRadius,
-                                                                                             nCores = 1),
+                                                                    PartData = ElPiGraph.R:::PartitionData(X = X,
+                                                                                                           NodePositions = UpdatedPG$NodePositions,
+                                                                                                           SquaredX = SquaredX,
+                                                                                                           TrimmingRadius = TrimmingRadius,
+                                                                                                           nCores = 1),
                                                                     ComputeMSEP = ComputeMSEP,
                                                                     age_vec = age_vec,
                                                                     eta = eta)
@@ -1576,11 +1663,11 @@ ElPrincGraph_edit <- function(X,
                 if(CompileReport){
                         tReport <- ReportOnPrimitiveGraphEmbedment_edit(X = X, NodePositions = UpdatedPG$NodePositions,
                                                                         ElasticMatrix = UpdatedPG$ElasticMatrix,
-                                                                        PartData = PartitionData(X = X,
-                                                                                                 NodePositions = UpdatedPG$NodePositions,
-                                                                                                 SquaredX = SquaredX,
-                                                                                                 TrimmingRadius = TrimmingRadius,
-                                                                                                 nCores = 1),
+                                                                        PartData = ElPiGraph.R:::PartitionData(X = X,
+                                                                                                               NodePositions = UpdatedPG$NodePositions,
+                                                                                                               SquaredX = SquaredX,
+                                                                                                               TrimmingRadius = TrimmingRadius,
+                                                                                                               nCores = 1),
                                                                         ComputeMSEP = ComputeMSEP,
                                                                         age_vec,
                                                                         eta)
@@ -1614,11 +1701,11 @@ ElPrincGraph_edit <- function(X,
                 if(!CompileReport){
                         tReport <- ReportOnPrimitiveGraphEmbedment_edit(X = X, NodePositions = UpdatedPG$NodePositions,
                                                                         ElasticMatrix = UpdatedPG$ElasticMatrix,
-                                                                        PartData = PartitionData(X = X,
-                                                                                                 NodePositions = UpdatedPG$NodePositions,
-                                                                                                 SquaredX = SquaredX,
-                                                                                                 TrimmingRadius = TrimmingRadius,
-                                                                                                 nCores = 1),
+                                                                        PartData = ElPiGraph.R:::PartitionData(X = X,
+                                                                                                               NodePositions = UpdatedPG$NodePositions,
+                                                                                                               SquaredX = SquaredX,
+                                                                                                               TrimmingRadius = TrimmingRadius,
+                                                                                                               nCores = 1),
                                                                         ComputeMSEP = ComputeMSEP,
                                                                         age_vec,
                                                                         eta)
@@ -1663,11 +1750,11 @@ ElPrincGraph_edit <- function(X,
         if (!is.null(age_vec)){
                 # Obtain partition data
                 K <- nrow(UpdatedPG$NodePositions)
-                partData <- PartitionData(X = X,
-                                          NodePositions = UpdatedPG$NodePositions,
-                                          SquaredX = SquaredX,
-                                          TrimmingRadius = TrimmingRadius,
-                                          nCores = 1)
+                partData <- ElPiGraph.R:::PartitionData(X = X,
+                                                        NodePositions = UpdatedPG$NodePositions,
+                                                        SquaredX = SquaredX,
+                                                        TrimmingRadius = TrimmingRadius,
+                                                        nCores = 1)
                 assignment <- partData$Partition
                 mean_age_j <- get_node_meanage(UpdatedPG$NodePositions,
                                                assignment,
@@ -1700,11 +1787,11 @@ ElPrincGraph_edit <- function(X,
                             ReportTable = ReportTable, FinalReport = FinalReport, Lambda = Lambda, Mu = Mu,
                             FastSolve = FastSolve, Mode = Mode, MaxNumberOfIterations = MaxNumberOfIterations,
                             eps = eps,
-                            partData = PartitionData(X = X,
-                                                     NodePositions = UpdatedPG$NodePositions,
-                                                     SquaredX = SquaredX,
-                                                     TrimmingRadius = TrimmingRadius,
-                                                     nCores = 1))
+                            partData = ElPiGraph.R:::PartitionData(X = X,
+                                                                   NodePositions = UpdatedPG$NodePositions,
+                                                                   SquaredX = SquaredX,
+                                                                   TrimmingRadius = TrimmingRadius,
+                                                                   nCores = 1))
         }
         
         return(out)
@@ -1758,7 +1845,9 @@ ReportOnPrimitiveGraphEmbedment_edit <- function(X,
         BARCODE = getPrimitiveGraphStructureBarCode(ElasticMatrix)
         
         if(is.null(PartData)){
-                PartData <- PartitionData(X = X, NodePositions = NodePositions, rowSums(X^2))
+                PartData <- ElPiGraph.R:::PartitionData(X = X,
+                                                        NodePositions = NodePositions,
+                                                        rowSums(X^2))
         }
         
         target_position <- get_target_positions(NodePositions,
@@ -1847,7 +1936,7 @@ get_node_graph <- function(nodes_mat, ElasticMatrix){
         edge_dists <- sqrt(rowSums((nodes_mat[edgs[, 2], , drop = F] - nodes_mat[edgs[, 1], , drop = F])^2))
         edge_weights <- 1 / (1 + edge_dists)
         g <- igraph::graph_from_edgelist(edgs, directed = F)
-        E(g)$weight <- edge_weights
+        igraph::E(g)$weight <- edge_weights
         return (g)
 }
 
@@ -1870,7 +1959,9 @@ get_node_pseudotime <- function(nodes_mat, mean_age, ElasticMatrix){
                 } else {
                         root <- 1L
                 }
-                dist_mat_nodes <- as.numeric(igraph::distances(g, v = root, to = V(g)))
+                dist_mat_nodes <- as.numeric(igraph::distances(g,
+                                                               v = root,
+                                                               to = igraph::V(g)))
                 tau_j <- dist_mat_nodes
         } else {
                 tau_j <- 0
@@ -1941,7 +2032,7 @@ PrimitiveElasticGraphEmbedment_edit <- function(X,
         K_init <- nrow(NodePositions)
         
         # Auxiliary computations
-        SpringLaplacianMatrix <- ComputeSpringLaplacianMatrix(ElasticMatrix)
+        SpringLaplacianMatrix <- ElPiGraph.R:::ComputeSpringLaplacianMatrix(ElasticMatrix)
         
         # Prepare squared norms
         if(is.null(SquaredX)){
@@ -1949,9 +2040,9 @@ PrimitiveElasticGraphEmbedment_edit <- function(X,
         }
         
         # Initial partition
-        PartDataStruct <- PartitionData(X = X, NodePositions = NodePositions,
-                                        SquaredX = SquaredX,
-                                        TrimmingRadius = TrimmingRadius)
+        PartDataStruct <- ElPiGraph.R:::PartitionData(X = X, NodePositions = NodePositions,
+                                                      SquaredX = SquaredX,
+                                                      TrimmingRadius = TrimmingRadius)
         assignment <- PartDataStruct$Partition
         
         target_positions <- get_target_positions(NodePositions,
@@ -2019,8 +2110,10 @@ PrimitiveElasticGraphEmbedment_edit <- function(X,
                                                                                        eta = eta)
                 }
                 
-                PartDataStruct <- PartitionData(X = X, NodePositions = NewNodePositions, SquaredX = SquaredX,
-                                                TrimmingRadius = TrimmingRadius)
+                PartDataStruct <- ElPiGraph.R:::PartitionData(X = X,
+                                                              NodePositions = NewNodePositions,
+                                                              SquaredX = SquaredX,
+                                                              TrimmingRadius = TrimmingRadius)
                 assignment <- PartDataStruct$Partition
                 
                 target_positions <- get_target_positions(NewNodePositions,
@@ -2042,7 +2135,7 @@ PrimitiveElasticGraphEmbedment_edit <- function(X,
                 
                 # compute difference
                 if(Mode == 1){
-                        difference <- ComputeRelativeChangeOfNodePositions(NodePositions, NewNodePositions)
+                        difference <- ElPiGraph.R::ComputeRelativeChangeOfNodePositions(NodePositions, NewNodePositions)
                 } else {
                         difference <- (OldPriGrElEn$ElasticEnergy - PriGrElEn$ElasticEnergy)/PriGrElEn$ElasticEnergy
                 }
@@ -2117,12 +2210,16 @@ cellsort <- create_cellsort_obj(seur = seur, cell_ids_in = cell_ids_in, target_c
 cellsort_toy <- create_cellsort_obj(seur = seur_toy, cell_ids_in = cell_ids_in_toy, target_cell = target_cell_toy, shiftlog = F)
 
 start_time <- Sys.time()
-x_pca <- irlba::prcomp_irlba(Matrix::t(cellsort$cell_expr), n = 100)
+x_pca <- irlba::prcomp_irlba(Matrix::t(cellsort$cell_expr),
+                             n = 100,
+                             scale. = T,
+                             center = T)
 end_time <- Sys.time()
 elapsed <- round(as.numeric(end_time - start_time, units = "mins"), digits = 3)
 print(sprintf("PCA done. %s minutes elapsed", elapsed))
-cor_method <- "pearson"
-n_comps_agecor <- 10
+
+cor_method <- "spearman"
+n_comps_agecor <- 20
 
 X <- x_pca$x
 
@@ -2139,15 +2236,26 @@ age_vec_toy <- cellsort_toy$cell_metadata$age
 
 # Do the tree
 ################################################################################
+X_toy <- apply(X_toy, 2, function(x) (x - mean(x))/sd(x))
 
 tree_toy <- computeElasticPrincipalTree_edit(X_toy,
-                                             NumNodes = 19,
+                                             NumNodes = 35,
                                              Lambda = 0.03, Mu = 0.01,
                                              age_vec = cellsort_toy$cell_metadata$age,
                                              Do_PCA = F,
                                              eta = 0.5,
                                              FastSolve = T,
-                                             MaxNumberOfIterations = 100)
+                                             MaxNumberOfIterations = 100,
+                                             n.cores = 6)
+
+PlotPG(X_toy,
+       TargetPG = tree_toy[[1]],
+       NodeLabels = paste0("N", as.character(tree_toy[[1]]$age_tau$node)),
+       LabMult = 3)
+
+plot(tree_toy[[1]]$g)
+
+tree_toy[[1]]$age_tau
 
 plot(tree_toy[[1]]$age_tau$pseudotime, tree_toy[[1]]$age_tau$average_age)
 
@@ -2157,6 +2265,51 @@ cor(tree_toy[[1]]$age_tau$pseudotime,
 
 plot(tree_toy[[1]]$NodePositions[, 1],
      tree_toy[[1]]$NodePositions[, 2])
+
+cell_pt_toy <- get_cell_pseudotime(X_toy, tree_toy[[1]]$NodePositions,
+                                   as_edgelist(tree_toy[[1]]$g),
+                                   node_pseudotimes = tree_toy[[1]]$age_tau$pseudotime)
+
+plot(x = cell_pt_toy$pseudotime, cellsort_toy$cell_metadata$age)
+
+tree_toy_graph <- ConstructGraph(tree_toy[[1]])
+tree_toy_e2e <- GetSubGraph(Net = tree_toy_graph, Structure = 'end2end')
+
+root <- which(tree_toy[[1]]$age_tau$pseudotime == 0)
+
+SelPaths_toy <- tree_toy_e2e[sapply(tree_toy_e2e,
+                                    function(x){any(x[c(1, length(x))] == root)})]
+
+SelPaths_toy <- lapply(SelPaths_toy, function(x){
+        if(x[1] == root){
+                return(x)
+        } else {
+                return(rev(x))
+        }
+})
+
+
+#PartStruct_toy <- PartitionData(X = X_toy,
+#                                NodePositions = tree_toy[[1]]$NodePositions)
+
+ProjStruct_toy <- project_point_onto_graph(X = X_toy,
+                                           NodePositions = tree_toy[[1]]$NodePositions,
+                                           Edges = tree_toy[[1]]$Edges$Edges,
+                                           Partition = tree_toy[[1]]$partitionData$Partition)
+
+AllPt_toy <- lapply(SelPaths_toy, function(x){
+        getPseudotime(ProjStruct = ProjStruct_toy,
+                      NodeSeq = names(x))
+})
+
+CompareOnBranches(X = X_toy,
+                  Paths = lapply(SelPaths_toy[1:4], function(x){names(x)}),
+                  TargetPG = tree_toy[[1]],
+                  Partition = tree_toy[[1]]$partitionData$Partition,
+                  PrjStr = ProjStruct_toy,
+                  Main = "A simple tree example",
+                  Features = 2)
+
 
 tree_real <- computeElasticPrincipalTree_edit(X,
                                               NumNodes = 25,
@@ -2173,9 +2326,15 @@ cor(tree_real[[1]]$age_tau$pseudotime,
     method = cor_method)
 
 
-age_vec <- cellsort$cell_metadata$age
+
 tree_obj <- tree_real[[1]]
-dat <- X
+get_cell_pseudotime(X, tree_obj$NodePositions, as_edgelist(tree_obj$g), node_pseudotimes = tree_obj$age_tau$pseudotime)
+
+sum(proj_tree$ProjectionValues > 1 | proj_tree$ProjectionValues < 0)/length(proj_tree$ProjectionValues)
+
+age_vec <- cellsort_toy$cell_metadata$age
+tree_obj <- tree_toy[[1]]
+dat <- X_toy
 n_comps <- 10
 n_neighbors <- 15
 min_dist <- 0.01
