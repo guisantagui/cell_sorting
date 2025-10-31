@@ -755,7 +755,7 @@ apply(dataset_one_bifurcation, 2, var)
 rownames(dataset_one_bifurcation) <- toy_donors$donor
 
 cell_dataset_one_bifurcation <- get_toy_cells(dataset_one_bifurcation,
-                                              sd = 15,
+                                              sd = 5,
                                               ncells = ncells_per_donor)
 
 metadata_one_bifurcation <- data.frame(cell = rownames(cell_dataset_one_bifurcation),
@@ -777,6 +777,12 @@ pca_one_bifurcation <- prcomp(cell_dataset_one_bifurcation, scale. = T, center =
 
 plotUtils::plotPCA(pca_one_bifurcation, samp_info = metadata_one_bifurcation_4pca_plot,
                    col = "age")
+
+plotUtils::doPCAMultiPlot(pca_one_bifurcation, samp_info = metadata_one_bifurcation_4pca_plot,
+                          col = "age",
+                          nComps = 5)
+
+plot(metadata_one_bifurcation$age, cell_dataset_one_bifurcation[, 2])
 
 one_bifurcation_umap <- uwot::umap(cell_dataset_one_bifurcation, ret_model = T,
                                    min_dist = .3)
@@ -818,4 +824,4 @@ seur_one_bifurcation@meta.data$body_weight <- metadata_one_bifurcation$body_weig
 
 seur_one_bifurcation@meta.data$calorie_intake <- metadata_one_bifurcation$calorie_intake[match(rownames(seur_one_bifurcation@meta.data),
                                                                                                metadata_one_bifurcation$cell)]
-saveRDS(seur, file = sprintf("%sseur_synth_one_bifurcation.rds", outDir))
+saveRDS(seur_one_bifurcation, file = sprintf("%sseur_synth_one_bifurcation.rds", outDir))

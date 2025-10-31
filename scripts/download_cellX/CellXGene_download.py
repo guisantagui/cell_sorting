@@ -9,6 +9,7 @@ import obonet
 import networkx
 import os 
 
+new_directory = "/Users/guillem.santamaria/Documents/postdoc/comput/neurodeg_aging_project/data/cellxgene/"
 new_directory = "/mnt/aiongpfs/projects/glad_seq/Platform/Atlas/CellXGene-census/human/download/"
 os.chdir(new_directory)
 

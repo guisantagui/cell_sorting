@@ -9,6 +9,26 @@ library(distutils)
 if (!require("ElPiGraph.R", quietly = T)){
         devtools::install_github("Albluca/ElPiGraph.R", upgrade = "never")
 }
+if (!require("mlrMBO", quietly = T)){
+        install.packages("mlrMBO")
+}
+
+if (!require("mco", quietly = T)){
+        install.packages("mco")
+}
+if (!require("emoa", quietly = T)){
+        install.packages("emoa")
+}
+if (!require("lhs", quietly = T)){
+        install.packages("lhs")
+}
+if (!require("rgenoud", quietly = T)){
+        install.packages("rgenoud")
+}
+
+library(rgenoud)
+library(mlrMBO)
+library(lhs)
 library(ElPiGraph.R)
 library(ggplot2)
 library(igraph)
@@ -29,7 +49,7 @@ library(uwot)
 
 outDir <- "/Users/guillem.santamaria/Documents/postdoc/comput/neurodeg_aging_project/results/cellsort/"
 
-seur_file <- sprintf("%sGSE254569_ctrls_seur.rds", outDir)
+#seur_file <- sprintf("%sGSE254569_ctrls_seur.rds", outDir)
 seur_toy_file <- sprintf("%sseur_synth_one_bifurcation.rds", outDir)
 
 donor_ids_in <- "donor"
@@ -43,7 +63,7 @@ target_cell_toy <- NULL
 # Load data
 ################################################################################
 
-seur <- readRDS(seur_file)
+#seur <- readRDS(seur_file)
 
 seur_toy <- readRDS(seur_toy_file)
 
@@ -1072,6 +1092,12 @@ computeElasticPrincipalGraph_edit <- function(Data,
         # Computing the graph
         
         print(paste("Computing EPG with", NumNodes, "nodes on", nrow(X), "points and", ncol(X), "dimensions"))
+        print(sprintf("Parameters: Mu = %s; Lambda = %s, alpha = %s, beta = %s, eta = %s",
+                      round(Mu, digits = 3),
+                      round(Lambda, digits = 3),
+                      round(alpha, digits = 3),
+                      round(beta, digits = 3),
+                      round(eta, digits = 3)))
         
         ElData <- ElPrincGraph_edit(X = X, NumNodes = NumNodes, NumEdges = NumEdges, Lambda = Lambda, Mu = Mu,
                                     MaxNumberOfIterations = MaxNumberOfIterations, eps = eps, TrimmingRadius = TrimmingRadius,
@@ -2202,32 +2228,262 @@ PrimitiveElasticGraphEmbedment_edit <- function(X,
                     RP = PriGrElEn$RP))
 }
 
+# Plotting functions
+################################################################################
+
+# Do UMAP of the tree and project cells onto the space and plot
+do_umap_tree <- function(tree_obj,
+                         dat,
+                         age_vec,
+                         n_comps = 2,
+                         n_neighbors = 10,
+                         min_dist = 0.01,
+                         plot_topage = F,
+                         dim_plot = c(1, 2),
+                         point_size = 0.5,
+                         cor_method = "pearson",
+                         seed = 666){
+        node_umap <- uwot::umap(tree_obj$NodePositions, ret_model = T,
+                                n_components = n_comps,
+                                n_neighbors = n_neighbors,
+                                min_dist = min_dist,
+                                seed = seed)
+        
+        node_df <- as.data.frame(node_umap$embedding)
+        
+        colnames(node_df) <- paste0("UMAP", 1:ncol(node_df))
+        
+        if (plot_topage){
+                cor_embed_age <- apply(node_df, 2,
+                                       cor,
+                                       y = age_vec,
+                                       method = cor_method)
+                top_age_comps <- order(abs(cor_embed_age), decreasing = T)[1:2]
+                message(sprintf("Plotting top 2 UMAP components associated to age: UMAP%s (x, %s cor = %s) and UMAP%s (y, %s cor = %s)",
+                                top_age_comps[1],
+                                cor_method,
+                                round(cor_embed_age[top_age_comps[1]], digits = 3),
+                                top_age_comps[2],
+                                cor_method,
+                                round(cor_embed_age[top_age_comps[2]], digits = 3)))
+                
+                
+                comp_x <- colnames(node_df)[top_age_comps[1]]
+                comp_y <- colnames(node_df)[top_age_comps[2]]
+                
+                node_df <- node_df[, top_age_comps]
+        }else{
+                message(sprintf("Plotting components UMAP%s (x) and UMAP%s (y).",
+                                dim_plot[1],
+                                dim_plot[2]))
+                comp_x <- sprintf("UMAP%s", dim_plot[1])
+                comp_y <- sprintf("UMAP%s", dim_plot[2])
+                top_age_comps <- c(comp_x, comp_y)
+                node_df <- node_df[, top_age_comps]
+        }
+        
+        node_df$mean_age <- tree_obj$age_tau$average_age
+        
+        cell_umap <- uwot::umap_transform(dat,
+                                          model = node_umap)
+        colnames(cell_umap) <- paste0("UMAP", 1:ncol(cell_umap))
+        cell_umap <- cell_umap[, top_age_comps]
+        edges <- as_edgelist(tree_obj$g)
+        cell_df <- as.data.frame(cell_umap)
+        cell_df$age <- age_vec
+        segments_df <- data.frame(x = node_df[edges[, 1], 1],
+                                  y = node_df[edges[, 1], 2],
+                                  xend = node_df[edges[, 2], 1],
+                                  yend = node_df[edges[, 2], 2])
+        
+        
+        
+        plt <- ggplot(cell_df, aes(x = .data[[comp_x]], .data[[comp_y]], col = age)) +
+                scale_color_gradient(low = "blue", high = "red", name = "Cell Age") +
+                geom_point(size = point_size, alpha = 0.6, stroke = 0) +
+                ggnewscale::new_scale_color() +
+                geom_segment(mapping = aes(x = x, y = y,
+                                           xend = xend, yend = yend),
+                             data = segments_df, inherit.aes = F) +
+                geom_point(mapping = aes(x = .data[[comp_x]],
+                                         y = .data[[comp_y]],
+                                         col = mean_age),
+                           data = node_df,
+                           size = 3, inherit.aes = F) +
+                scale_color_gradient(low = "blue",
+                                     high = "red",
+                                     name = "Mean Age") +
+                theme(axis.text.y = element_text(size=15),
+                      axis.text.x = element_text(size=15),
+                      panel.background = element_blank(),
+                      panel.grid.major = element_line(colour = "gray"), 
+                      panel.grid.minor = element_blank(),
+                      axis.line = element_line(colour = "black"),
+                      axis.line.y = element_line(colour = "black"),
+                      panel.border = element_rect(colour = "black",
+                                                  fill=NA, size=1))
+        
+        out <- list(node_umap = node_umap,
+                    cell_umap = cell_umap,
+                    plot = plt)
+        return(out)
+}
+
+# Do PCA of the tree and project cells onto the space and plot
+do_pca_tree <- function(tree_obj,
+                        dat,
+                        age_vec,
+                        n_comps = 2,
+                        dim_plot = c(1, 2),
+                        cell_point_size = 0.5,
+                        cell_point_alpha = 0.5,
+                        node_point_size = 3,
+                        node_labels = F,
+                        label_size = 3,
+                        doPCA = T){
+        # Compute PCA of nodes and project cells onto it
+        if (doPCA){
+                node_pca <- prcomp(tree_obj$NodePositions,
+                                   retx = T,
+                                   center = T)
+                cell_pca <- t(t(dat) - node_pca$center) %*% node_pca$rotation
+                
+                # Get variance prop for the tree and for the cells
+                cellVarPerc <- apply(cell_pca, 2, var)/sum(apply(dat,
+                                                                 2, 
+                                                                 var))        
+                nodeVarPerc <- (node_pca$sdev^2)/sum(apply(tree_obj$NodePositions, 
+                                                           2,
+                                                           var))
+                
+                # Create DFs for plotting nodes and cells
+                node_df <- as.data.frame(node_pca$x)
+                message(sprintf("Plotting components PC%s (x) and PC%s (y).",
+                                dim_plot[1],
+                                dim_plot[2]))
+                comp_x <- sprintf("PC%s", dim_plot[1])
+                comp_y <- sprintf("PC%s", dim_plot[2])
+                top_age_comps <- c(comp_x, comp_y)
+                
+                cell_df <- cell_pca[, top_age_comps]
+                cell_df <- as.data.frame(cell_df)
+                
+                lab_x <- sprintf("Tree PC%s (data var. = %s%% / tree var. = %s%%)",
+                                 dim_plot[1],
+                                 round(cellVarPerc[dim_plot[1]] * 100, digits = 1),
+                                 round(nodeVarPerc[dim_plot[1]] * 100, digits = 1))
+                lab_y <- sprintf("Tree PC%s (data var. = %s%% / tree var. = %s%%)",
+                                 dim_plot[2],
+                                 round(cellVarPerc[dim_plot[2]] * 100, digits = 1),
+                                 round(nodeVarPerc[dim_plot[2]] * 100, digits = 1))
+        }else{
+                node_df <- as.data.frame(tree_obj$NodePositions)
+                cell_df <- dat
+                colnames(node_df) <- colnames(cell_df)
+                comp_x <- colnames(dat)[dim_plot[1]]
+                comp_y <- colnames(dat)[dim_plot[2]]
+                message(sprintf("Plotting genes %s (x) and %s (y).",
+                                comp_x,
+                                comp_y))
+                top_age_comps <- c(comp_x, comp_y)
+                cell_df <- as.data.frame(cell_df[, top_age_comps])
+                lab_x <- comp_x
+                lab_y <- comp_y
+        }
+        
+        node_df <- node_df[, top_age_comps]
+        
+        
+        node_df$mean_age <- tree_obj$age_tau$average_age
+        
+        edges <- as_edgelist(tree_obj$g)
+        
+        cell_df$age <- age_vec
+        segments_df <- data.frame(x = node_df[edges[, 1], 1],
+                                  y = node_df[edges[, 1], 2],
+                                  xend = node_df[edges[, 2], 1],
+                                  yend = node_df[edges[, 2], 2])
+        
+        
+        
+        
+        plt <- ggplot(cell_df, aes(x = .data[[comp_x]], .data[[comp_y]], col = age)) +
+                scale_color_gradient(low = "blue", high = "red", name = "cell age") +
+                geom_point(size = cell_point_size, alpha = cell_point_alpha,
+                           stroke = 0) +
+                ggnewscale::new_scale_color() +
+                geom_segment(mapping = aes(x = x, y = y,
+                                           xend = xend, yend = yend),
+                             data = segments_df, inherit.aes = F) +
+                geom_point(mapping = aes(x = .data[[comp_x]],
+                                         y = .data[[comp_y]],
+                                         col = mean_age),
+                           data = node_df,
+                           size = node_point_size,
+                           inherit.aes = F) +
+                scale_color_gradient(low = "blue",
+                                     high = "red",
+                                     name = "node mean age") +
+                labs(x = lab_x, y = lab_y) +
+                theme(axis.text.y = element_text(size=15),
+                      axis.text.x = element_text(size=15),
+                      panel.background = element_blank(),
+                      panel.grid.major = element_line(colour = "gray"), 
+                      panel.grid.minor = element_blank(),
+                      axis.line = element_line(colour = "black"),
+                      axis.line.y = element_line(colour = "black"),
+                      panel.border = element_rect(colour = "black",
+                                                  fill=NA, size=1))
+        
+        if (node_labels){
+                plt <- plt +
+                        geom_text(mapping = aes(x = .data[[comp_x]],
+                                                y = .data[[comp_y]],
+                                                label = rownames(node_df)),
+                                  data = node_df,
+                                  color = "black",
+                                  size = label_size,
+                                  vjust = -0.7,
+                                  inherit.aes = FALSE)
+        } 
+        
+        if (doPCA){
+                out <- list(node_pca = node_pca,
+                            cell_pca = cell_pca,
+                            plot = plt)
+        }else{
+                out <- list(plot = plt)
+        }
+        
+        return(out)
+}
+
 
 # Create input matrices
 ################################################################################
 
-cellsort <- create_cellsort_obj(seur = seur, cell_ids_in = cell_ids_in, target_cell = target_cell, n_var_features = 5000)
+#cellsort <- create_cellsort_obj(seur = seur, cell_ids_in = cell_ids_in, target_cell = target_cell, n_var_features = 5000)
 cellsort_toy <- create_cellsort_obj(seur = seur_toy, cell_ids_in = cell_ids_in_toy, target_cell = target_cell_toy, shiftlog = F)
 
-start_time <- Sys.time()
-x_pca <- irlba::prcomp_irlba(Matrix::t(cellsort$cell_expr),
-                             n = 100,
-                             scale. = T,
-                             center = T)
-end_time <- Sys.time()
-elapsed <- round(as.numeric(end_time - start_time, units = "mins"), digits = 3)
-print(sprintf("PCA done. %s minutes elapsed", elapsed))
+#start_time <- Sys.time()
+#x_pca <- irlba::prcomp_irlba(Matrix::t(cellsort$cell_expr),
+#                             n = 100,
+#                             scale. = T,
+#                             center = T)
+#end_time <- Sys.time()
+#elapsed <- round(as.numeric(end_time - start_time, units = "mins"), digits = 3)
+#print(sprintf("PCA done. %s minutes elapsed", elapsed))
 
 cor_method <- "spearman"
 n_comps_agecor <- 20
 
-X <- x_pca$x
+#X <- x_pca$x
 
-X <- X[, order(abs(apply(x_pca$x,
-                         2,
-                         function(x) cor(x,
-                                         cellsort$cell_metadata$age,
-                                         method = cor_method))), decreasing = T)[1:n_comps_agecor]]
+#X <- X[, order(abs(apply(x_pca$x,
+#                         2,
+#                         function(x) cor(x,
+#                                         cellsort$cell_metadata$age,
+#                                         method = cor_method))), decreasing = T)[1:n_comps_agecor]]
 
 X_toy <- as.matrix(Matrix::t(cellsort_toy$cell_expr))
 age_vec_toy <- cellsort_toy$cell_metadata$age
@@ -2238,20 +2494,261 @@ age_vec_toy <- cellsort_toy$cell_metadata$age
 ################################################################################
 X_toy <- apply(X_toy, 2, function(x) (x - mean(x))/sd(x))
 
+pca_toy <- prcomp(X_toy, scale. = F, center = F)
+
+cell_info_4pca <- cellsort_toy$cell_metadata
+
+cell_info_4pca$sample <- rownames(cell_info_4pca)
+
+plotUtils::plotPCA(pca_toy,
+                   samp_info = cell_info_4pca,
+                   col = "age",
+                   point_size = 1,
+                   x = "PC1",
+                   y = "PC2")
+
+plotUtils::doPCAMultiPlot(pca_toy, nComps = 5, samp_info = cell_info_4pca,
+                          col = "age",
+                          point_size = 0.5)
+
 tree_toy <- computeElasticPrincipalTree_edit(X_toy,
-                                             NumNodes = 35,
-                                             Lambda = 0.03, Mu = 0.01,
+                                             NumNodes = 25,
+                                             Lambda = 0.03, Mu = 0.3,
                                              age_vec = cellsort_toy$cell_metadata$age,
                                              Do_PCA = F,
-                                             eta = 0.5,
+                                             eta = 1,
                                              FastSolve = T,
                                              MaxNumberOfIterations = 100,
-                                             n.cores = 6)
+                                             n.cores = 8)
 
-PlotPG(X_toy,
-       TargetPG = tree_toy[[1]],
-       NodeLabels = paste0("N", as.character(tree_toy[[1]]$age_tau$node)),
-       LabMult = 3)
+pca_plt <- do_pca_tree(tree_obj = tree_toy[[1]],
+                       dat = X_toy,
+                       age_vec = cellsort_toy$cell_metadata$age,
+                       node_labels = T,
+                       cell_point_size = 2,
+                       cell_point_alpha = .2, dim_plot = c(1, 2))
+pca_plt$plot
+
+tree_toy[[1]]$age_tau
+
+plot(tree_toy[[1]]$age_tau$pseudotime, tree_toy[[1]]$age_tau$average_age)
+
+cor(tree_toy[[1]]$age_tau$pseudotime,
+    tree_toy[[1]]$age_tau$average_age,
+    method = cor_method)
+
+
+cell_pt_toy <- get_cell_pseudotime(X_toy, tree_toy[[1]]$NodePositions,
+                                   as_edgelist(tree_toy[[1]]$g),
+                                   node_pseudotimes = tree_toy[[1]]$age_tau$pseudotime)
+
+plot(x = cell_pt_toy$pseudotime, cellsort_toy$cell_metadata$age)
+
+cor(cell_pt_toy$pseudotime,
+    cellsort_toy$cell_metadata$age,
+    method = "spearman")
+
+
+plot(cell_pt_toy$pseudotime, X_toy[, 1])
+
+# Bayesian optimizations for the elastic tree parameters
+################################################################################
+
+make_elastic_objfun <- function(X, age_vec, MaxNumberOfIterations = 100,
+                                n.cores = 8,
+                                ps,
+                                FastSolve = T,
+                                CenterData = F,
+                                max_energy){
+        makeMultiObjectiveFunction(
+                name = "ElasticTree",
+                fn = function(x){
+                        x <- as.list(x)
+                        res <- computeElasticPrincipalTree_edit(
+                                X,
+                                NumNodes = x$NumNodes,
+                                Lambda = x$Lambda,
+                                Mu = x$Mu,
+                                eta = x$eta,
+                                alpha = x$alpha,
+                                beta = x$beta,
+                                age_vec = age_vec,
+                                Do_PCA = F,
+                                FastSolve = FastSolve,
+                                MaxNumberOfIterations = MaxNumberOfIterations,
+                                n.cores = n.cores,
+                                TrimmingRadius = x$TrimmingRadius,
+                                CenterData = CenterData
+                        )
+                        
+                        pt <- get_cell_pseudotime(X, res[[1]]$NodePositions,
+                                                  as_edgelist(res[[1]]$g),
+                                                  node_pseudotimes = res[[1]]$age_tau$pseudotime)
+                        
+                        AgeCorr <- cor(pt$pseudotime,
+                                       age_vec,
+                                       method = "spearman")
+                        # Normalize cor to 0-1 range
+                        AgeCorr <- (1 - AgeCorr) / 2
+                        
+                        #AgeCorr <- -cor(res[[1]]$age_tau$average_age,
+                        #                res[[1]]$age_tau$pseudotime,
+                        #                method = "spearman")
+                        elastNrgy <- log1p(res[[1]]$FinalReport$ENERGY) / log1p(max_energy)
+                        if (is.na(AgeCorr)) AgeCorr <- 1
+                        out <- c(ElasticEnergy = elastNrgy,
+                                 AgeCorr = AgeCorr)
+                        return(out)
+                },
+                par.set = ps,
+                n.objectives = 2,
+                minimize = c(T, T)
+        )
+}
+
+#subsample_cells <- function()
+
+# Define parameter space
+
+set.seed(321)
+n_sub <- 500
+idx <- sample(seq_len(nrow(X_toy)), n_sub)
+X_sub <- X_toy[idx, ]
+
+dist_fast <- function(X){
+        row_sqnorms <- matrixStats::rowSums2(X^2)
+        G <- X %*% t(X)
+        
+        # squared distance matrix
+        D2 <- outer(row_sqnorms, row_sqnorms, "+") - 2*G
+        D2 <- pmax(D2, 0)
+        # optional: sqrt for Euclidean
+        D <- as.dist(sqrt(D2))
+        return(D)
+}
+
+age_sub <- age_vec_toy[idx]
+
+trimRad <- median(dist_fast(X_sub))
+
+# Upper bound: all points to single centroid
+max_energy <- sum(rowSums((X_sub - matrix(colMeans(X_sub),
+                                          nrow = nrow(X_sub),
+                                          ncol = ncol(X_sub),
+                                          byrow=TRUE))^2))
+
+# In objective:
+#ElasticEnergy_norm <- res[[1]]$FinalReport$ENERGY / max_energy
+
+# Mu has to be one order of magnitude higher than Lambda, according to ElPiGraph
+# paper. Lambda starts at 1e-2. So adjust accordingly
+ps <- makeParamSet(
+        makeNumericParam("Lambda", lower = 0.01, upper = 0.1),
+        makeNumericParam("Mu", lower = 0.1, upper = 1),
+        makeNumericParam("alpha", lower = 0, upper = 0.01),
+        makeNumericParam("beta", lower = 0, upper = 0.01),
+        makeNumericParam("eta", lower = 0, upper = 1),
+        makeIntegerParam("NumNodes", lower = 10, upper = 40),
+        makeNumericParam("TrimmingRadius", lower = trimRad * 0.5, upper = trimRad * 2)
+)
+
+
+obj_fun_toy <- make_elastic_objfun(X_sub, age_sub, n.cores = 1, ps = ps,
+                                   MaxNumberOfIterations = 50,
+                                   max_energy = max_energy)
+
+
+N_init <- 20
+
+lhs_raw <- randomLHS(N_init, length(getParamSet(obj_fun_toy)$pars))
+
+map_lhs_to_params <- function(lhs_row, ps) {
+        pars <- ps$pars
+        out <- list()
+        i <- 1
+        for (pname in names(pars)) {
+                p <- pars[[pname]]
+                if (p$type == "numeric") {
+                        val <- p$lower + lhs_row[i] * (p$upper - p$lower)
+                        out[[pname]] <- val
+                } else if (p$type == "integer") {
+                        val <- p$lower + floor(lhs_row[i] * (p$upper - p$lower + 1))
+                        out[[pname]] <- val
+                }
+                i <- i + 1
+        }
+        return(out)
+}
+
+init_design_list <- lapply(seq_len(N_init),
+                           function(i) map_lhs_to_params(lhs_raw[i, ],
+                                                         ps))
+# convert to data.frame for mlrMBO initial design
+init_design_df <- do.call(rbind, lapply(init_design_list, as.data.frame))
+rownames(init_design_df) <- NULL
+
+ctrl <- makeMBOControl(n.objectives = 2, propose.points = 1)
+ctrl <- setMBOControlInfill(ctrl, crit = makeMBOInfillCritDIB())
+ctrl <- setMBOControlTermination(ctrl, iters = 30)
+
+parallelMap::parallelStartMulticore(cpus = 8)
+res_mbo <- mbo(obj_fun_toy, design = init_design_df, control = ctrl)
+parallelMap::parallelStop()
+
+saveRDS(res_mbo, file = sprintf("%smbo_res_toy.rds", outDir))
+
+pareto_front_res <- as.data.frame(res_mbo$opt.path)[res_mbo$pareto.inds, ]
+par_idx <- which.min(pareto_front_res$y_2)
+
+# Fit the total tree
+################################################################################
+
+tree_pareto_list <- list()
+for(i in 1:nrow(pareto_front_res)){
+        tree_par <- computeElasticPrincipalTree_edit(X_toy,
+                                                     NumNodes = pareto_front_res$NumNodes[i],
+                                                     Lambda = pareto_front_res$Lambda[i],
+                                                     Mu = pareto_front_res$Mu[i],
+                                                     alpha = pareto_front_res$alpha[i],
+                                                     beta = pareto_front_res$beta[i],
+                                                     age_vec = cellsort_toy$cell_metadata$age,
+                                                     Do_PCA = F,
+                                                     eta = pareto_front_res$eta[i],
+                                                     FastSolve = T,
+                                                     MaxNumberOfIterations = 100,
+                                                     n.cores = 8)
+        tree_pareto_list[[i]] <- tree_par[[1]]
+}
+
+tree_toy <- computeElasticPrincipalTree_edit(X_toy,
+                                             NumNodes = pareto_front_res$NumNodes[par_idx],
+                                             Lambda = pareto_front_res$Lambda[par_idx],
+                                             Mu = pareto_front_res$Mu[par_idx],
+                                             alpha = pareto_front_res$alpha[par_idx],
+                                             beta = pareto_front_res$beta[par_idx],
+                                             age_vec = cellsort_toy$cell_metadata$age,
+                                             Do_PCA = F,
+                                             eta = pareto_front_res$eta[par_idx],
+                                             FastSolve = T,
+                                             MaxNumberOfIterations = 100,
+                                             n.cores = 8)
+
+pca_plt <- do_pca_tree(tree_obj = tree_toy[[1]],
+                       dat = X_toy,
+                       age_vec = cellsort_toy$cell_metadata$age,
+                       node_labels = T,
+                       cell_point_size = 2,
+                       cell_point_alpha = .2, dim_plot = c(1, 2),
+                       doPCA = F)
+pca_plt$plot
+
+tree_toy[[1]]$age_tau
+
+
+#PlotPG(X_toy,
+#       TargetPG = tree_toy[[1]],
+#       NodeLabels = paste0("N", as.character(tree_toy[[1]]$age_tau$node)),
+#       LabMult = 3)
 
 plot(tree_toy[[1]]$g)
 
@@ -2271,6 +2768,14 @@ cell_pt_toy <- get_cell_pseudotime(X_toy, tree_toy[[1]]$NodePositions,
                                    node_pseudotimes = tree_toy[[1]]$age_tau$pseudotime)
 
 plot(x = cell_pt_toy$pseudotime, cellsort_toy$cell_metadata$age)
+
+cor(cell_pt_toy$pseudotime,
+    cellsort_toy$cell_metadata$age,
+    method = "spearman")
+
+plot(cell_pt_toy$pseudotime, X_toy[, 2])
+
+cor(cell_pt_toy$pseudotime, cellsort_toy$cell_metadata$age, method = "spearman")
 
 tree_toy_graph <- ConstructGraph(tree_toy[[1]])
 tree_toy_e2e <- GetSubGraph(Net = tree_toy_graph, Structure = 'end2end')
@@ -2332,74 +2837,22 @@ get_cell_pseudotime(X, tree_obj$NodePositions, as_edgelist(tree_obj$g), node_pse
 
 sum(proj_tree$ProjectionValues > 1 | proj_tree$ProjectionValues < 0)/length(proj_tree$ProjectionValues)
 
-age_vec <- cellsort_toy$cell_metadata$age
-tree_obj <- tree_toy[[1]]
-dat <- X_toy
-n_comps <- 10
-n_neighbors <- 15
-min_dist <- 0.01
-plot_topage <- F
-dim_plot <- c(1, 2)
 
 
-dat_umap <- uwot::umap(dat, ret_model = T,
-                       n_components = n_comps,
-                       n_neighbors = n_neighbors,
-                       min_dist = min_dist)
-
-df <- as.data.frame(dat_umap$embedding)
-
-colnames(df) <- paste0("UMAP", 1:ncol(df))
-
-if (plot_topage){
-        cor_embed_age <- apply(df, 2, cor, y = age_vec, method = cor_method)
-        top_age_comps <- order(abs(cor_embed_age), decreasing = T)[1:2]
-        message(sprintf("Plotting top 2 UMAP components associated to age: UMAP%s (x, %s cor = %s) and UMAP%s (y, %s cor = %s)",
-                        top_age_comps[1],
-                        cor_method,
-                        round(cor_embed_age[top_age_comps[1]], digits = 3),
-                        top_age_comps[2],
-                        cor_method,
-                        round(cor_embed_age[top_age_comps[2]], digits = 3)))
-        
-        
-        comp_x <- colnames(df)[top_age_comps[1]]
-        comp_y <- colnames(df)[top_age_comps[2]]
-        
-        df <- df[, top_age_comps]
-}else{
-        message(sprintf("Plotting components UMAP%s (x) and UMAP%s (y).",
-                        dim_plot[1],
-                        dim_plot[2]))
-        comp_x <- sprintf("UMAP%s", dim_plot[1])
-        comp_y <- sprintf("UMAP%s", dim_plot[2])
-        top_age_comps <- c(comp_x, comp_y)
-        df <- df[, top_age_comps]
-}
-
-df$age <- age_vec
-
-node_umap <- uwot::umap_transform(tree_obj$NodePositions, model = dat_umap)
-colnames(node_umap) <- paste0("UMAP", 1:ncol(node_umap))
-node_umap <- node_umap[, top_age_comps]
-edges <- as_edgelist(tree_obj$g)
-nodes_df <- as.data.frame(node_umap)
-nodes_df$mean_age <- tree_obj$age_tau$average_age
-segments_df <- data.frame(x = node_umap[edges[, 1], 1],
-                          y = node_umap[edges[, 1], 2],
-                          xend = node_umap[edges[, 2], 1],
-                          yend = node_umap[edges[, 2], 2])
+# Plot the trees
+##########
+umap_plt <- do_umap_tree(tree_obj = tree_toy[[1]],
+                         dat = X_toy,
+                         age_vec = cellsort_toy$cell_metadata$age,
+                         n_neighbors = 8,
+                         min_dist = 0.01)
+umap_plt$plot
 
 
-
-plt <- ggplot(df, aes(x = .data[[comp_x]], .data[[comp_y]], col = age)) +
-        scale_color_gradient(low = "blue", high = "red", name = "Cell Age") +
-        geom_point(size = 0.3, alpha = 0.6, stroke = 0) +
-        ggnewscale::new_scale_color() +
-        geom_segment(mapping = aes(x = x, y = y, xend = xend, yend = yend), data = segments_df, inherit.aes = F) +
-        geom_point(mapping = aes(x = .data[[comp_x]], y = .data[[comp_y]], col = mean_age), data = nodes_df,
-                   size = 3, inherit.aes = F) +
-        scale_color_gradient(low = "blue", high = "red", name = "Mean Age") +
-        theme_minimal()
-        
-plt
+pca_plt <- do_pca_tree(tree_obj = tree_toy[[1]],
+                       dat = X_toy,
+                       age_vec = cellsort_toy$cell_metadata$age,
+                       node_labels = T,
+                       cell_point_size = 2,
+                       cell_point_alpha = .2, dim_plot = c(1, 2))
+pca_plt$plot
