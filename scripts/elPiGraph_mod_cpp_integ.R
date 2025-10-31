@@ -2511,7 +2511,7 @@ plotUtils::doPCAMultiPlot(pca_toy, nComps = 5, samp_info = cell_info_4pca,
                           col = "age",
                           point_size = 0.5)
 
-tree_toy <- computeElasticPrincipalTree_edit(X_toy,
+tree_toy <- computeElasticPrincipalTree_edit(X_toy[, c(1, 2, 10)],
                                              NumNodes = 25,
                                              Lambda = 0.03, Mu = 0.3,
                                              age_vec = cellsort_toy$cell_metadata$age,
@@ -2522,11 +2522,12 @@ tree_toy <- computeElasticPrincipalTree_edit(X_toy,
                                              n.cores = 8)
 
 pca_plt <- do_pca_tree(tree_obj = tree_toy[[1]],
-                       dat = X_toy,
+                       dat = X_toy[, c(1, 2, 10)],
                        age_vec = cellsort_toy$cell_metadata$age,
                        node_labels = T,
                        cell_point_size = 2,
-                       cell_point_alpha = .2, dim_plot = c(1, 2))
+                       cell_point_alpha = .2, dim_plot = c(1, 2),
+                       doPCA = F)
 pca_plt$plot
 
 tree_toy[[1]]$age_tau
@@ -2733,12 +2734,12 @@ tree_toy <- computeElasticPrincipalTree_edit(X_toy,
                                              MaxNumberOfIterations = 100,
                                              n.cores = 8)
 
-pca_plt <- do_pca_tree(tree_obj = tree_toy[[1]],
+pca_plt <- do_pca_tree(tree_obj = tree_pareto_list[[3]],
                        dat = X_toy,
                        age_vec = cellsort_toy$cell_metadata$age,
                        node_labels = T,
                        cell_point_size = 2,
-                       cell_point_alpha = .2, dim_plot = c(1, 2),
+                       cell_point_alpha = .2, dim_plot = c(2, 10),
                        doPCA = F)
 pca_plt$plot
 
