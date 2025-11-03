@@ -407,7 +407,9 @@ computeElasticPrincipalGraphWithGrammars_edit <- function(X,
                                                                 "get_target_positions",
                                                                 "get_node_meanage",
                                                                 "get_node_graph",
-                                                                "get_node_pseudotime"), envir=environment())
+                                                                "get_node_pseudotime",
+                                                                "identify_branches",
+                                                                "get_root"), envir=environment())
                 }
         } else {
                 cl = 1
@@ -1790,10 +1792,12 @@ ElPrincGraph_edit <- function(X,
                 g <- get_node_graph(UpdatedPG$NodePositions,
                                     UpdatedPG$ElasticMatrix)
                 
+                root <- get_root(g, mean_age_j)
+                
                 # Obtain final pseudotimes
                 tau_j <- get_node_pseudotime(UpdatedPG$NodePositions,
-                                             mean_age_j,
-                                             UpdatedPG$ElasticMatrix)
+                                             g,
+                                             root)
                 
                 
                 #print(names(mean_list))
@@ -1955,36 +1959,71 @@ get_node_meanage <- function(nodes_mat, assignment, age_vec){
 get_node_graph <- function(nodes_mat, ElasticMatrix){
         # Obtain decoded elastic matrix and
         # extract edges.
+        #message("Nodes matrix:")
+        #print(nodes_mat)
+        #message("El. mat.:")
+        #print(ElasticMatrix)
         dec_elMat <- ElPiGraph.R::DecodeElasticMatrix(ElasticMatrix)
         edgs <- dec_elMat$Edges
         # Obtain weights based on Euclidean
         # dists
         edge_dists <- sqrt(rowSums((nodes_mat[edgs[, 2], , drop = F] - nodes_mat[edgs[, 1], , drop = F])^2))
         edge_weights <- 1 / (1 + edge_dists)
+        
+        #message("Elastic matrix")
+        #print(ElasticMatrix)
+        
+        #message("Node matrix")
+        #print(nodes_mat)
+        
+        #message("Graph weights:")
+        #print(edge_weights)
+        #message("Graph before weight assignemnt:")
+        
         g <- igraph::graph_from_edgelist(edgs, directed = F)
+        #print(g)
         igraph::E(g)$weight <- edge_weights
+        #message("Edge weights:")
+        #print(edge_weights)
+        #message("Graph after weight assignemnt:")
+        #print(g)
         return (g)
 }
 
+
+#g <- get_node_graph(tree_toy[[1]]$NodePositions, tree_toy[[1]]$ElasticMatrix)
+
+#mean_age <- tree_toy[[1]]$age_tau$average_age
+
+# identify leaves and assign root to 
+# leaf with minimum age
+get_root <- function(g, mean_age){
+        degs <- igraph::degree(g)
+        leaves <- which(degs == 1)
+        root <- NA_integer_
+        if(length(leaves) > 0 && any(!is.na(mean_age[leaves]))){
+                root <- leaves[which.min(mean_age[leaves])]
+        } else if(any(!is.na(mean_age))){
+                root <- which.min(mean_age)
+        } else {
+                root <- 1L
+        }
+        return(root)
+}
+
+#root <- get_root(g, mean_age = mean_age)
+
 # Computes pseudotime of nodes by extracting the graph, starting from the
 # leaf with the lowest mean age.
-get_node_pseudotime <- function(nodes_mat, mean_age, ElasticMatrix){
+get_node_pseudotime <- function(nodes_mat,
+                                g,
+                                root){
         K <- nrow(nodes_mat)
         tau_j <- rep(NA_real_, K)
         if(K > 1){
-                g <- get_node_graph(nodes_mat, ElasticMatrix)
-                # identify leaves and assign root to 
-                # leaf with minimum age
-                degs <- igraph::degree(g)
-                leaves <- which(degs == 1)
-                root <- NA_integer_
-                if(length(leaves) > 0 && any(!is.na(mean_age[leaves]))){
-                        root <- leaves[which.min(mean_age[leaves])]
-                } else if(any(!is.na(mean_age))){
-                        root <- which.min(mean_age)
-                } else {
-                        root <- 1L
-                }
+                #print(class(g))
+                #message(sprintf("Root = %s", root))
+                #print(igraph::V(g))
                 dist_mat_nodes <- as.numeric(igraph::distances(g,
                                                                v = root,
                                                                to = igraph::V(g)))
@@ -1995,38 +2034,90 @@ get_node_pseudotime <- function(nodes_mat, mean_age, ElasticMatrix){
         return(tau_j)
 }
 
+#tau_j <- get_node_pseudotime(tree)
+
+# Find all the paths that go from the root to the leaves
+identify_branches <- function(g, mean_age){
+        # Find all paths from root to leaves
+        # For a tree, each leaf defines a branch
+        degs <- igraph::degree(g)
+        leaves <- which(degs == 1)
+        root <- get_root(g, mean_age)
+        leaves <- leaves[leaves != root]
+        
+        branches <- lapply(leaves, function(leaf){
+                path <- igraph::shortest_paths(g,
+                                               from = root,
+                                               to = leaf)$vpath[[1]]
+                as.numeric(path)
+        })
+        
+        return(branches)
+}
+
 # Get target node positions based on an isotonic regression on age vs pseudotime
+# in a branch-aware manner
 get_target_positions <- function(nodes_mat, assignment, age_vec, ElasticMatrix){
         K <- nrow(nodes_mat)
         D <- ncol(nodes_mat)
         
+        g <- get_node_graph(nodes_mat, ElasticMatrix)
+        
         mean_age_j <- get_node_meanage(nodes_mat, assignment, age_vec)
+        root <- get_root(g, mean_age = mean_age_j)
+        tau_j <- get_node_pseudotime(nodes_mat, g, root)
         
-        tau_j <- get_node_pseudotime(nodes_mat, mean_age_j, ElasticMatrix)
+        # Initialize with current positions
+        pos_target <- nodes_mat
         
+        # Get branches
+        branches <- identify_branches(g, mean_age = mean_age_j)
         
-        ok <- !is.na(mean_age_j) & !is.na(tau_j)
-        if(sum(ok) >= 2){
-                iso_fit <- stats::isoreg(mean_age_j[ok], tau_j[ok])
-                r_ok <- iso_fit$yf
-                r_j <- rep(NA_real_, K)
-                r_j[which(ok)] <- r_ok
-                r_j[is.na(r_j)] <- tau_j[is.na(r_j)]
-        } else {
-                r_j <- tau_j
+        # Get a node counter and a position accumulator to average node 
+        # positions of nodes that are shared accross multiple branches (the
+        # trunk for example).
+        node_count <- rep(0, K)
+        pos_accumulator <- matrix(0, K, D)
+        
+        for (branch_nodes in branches){
+                if (length(branch_nodes) < 0) next
+                age_b <- mean_age_j[branch_nodes]
+                tau_b <- tau_j[branch_nodes]
+                nodes_b <- nodes_mat[branch_nodes, , drop = F]
+                
+                # Do isotonic regression on the branch
+                ok <- !is.na(age_b) & !is.na(tau_b)
+                r_b <- tau_b
+                if (sum(ok) >= 2){
+                        iso_fit <- stats::isoreg(age_b[ok],
+                                                 tau_b[ok])
+                        r_b[ok] <- iso_fit$yf
+                }
+                # Interpolate within the branch
+                ord <- order(tau_b)
+                for (dimc in seq_len(D)){
+                        #message(sprintf("tau_b[ord] (dimc = %s):", dimc))
+                        #print(tau_b[ord])
+                        #message(sprintf("nodes_b[ord, dimc] (dimc = %s):", dimc))
+                        #print(nodes_b[ord, dimc])
+                        #message(sprintf("r_b (dimc = %s):", dimc))
+                        r_b <- pmin(pmax(r_b, min(tau_b[ok])), max(tau_b[ok]))
+                        #print(r_b)
+                        interp_vals <- stats::approx(tau_b[ord],
+                                                     nodes_b[ord, dimc],
+                                                     xout = r_b)$y
+                        #message(sprintf("Interp. vals dimc = %s", dimc))
+                        #print(interp_vals)
+                        accumulated <- pos_accumulator[branch_nodes, dimc] + 
+                                interp_vals[order(order(tau_b))]
+                        pos_accumulator[branch_nodes, dimc] <- accumulated
+                }
+                node_count[branch_nodes] <- node_count[branch_nodes] + 1
         }
         
-        # interpolate per dimension
-        ord <- order(tau_j)
-        tau_ord <- tau_j[ord]
-        nodes_ord <- nodes_mat[ord, , drop = FALSE]
-        pos_target <- matrix(NA_real_, nrow = K, ncol = D)
-        for(dimc in seq_len(D)){
-                col_vals <- nodes_ord[, dimc]
-                interp_vals <- stats::approx(x = tau_ord, y = col_vals, xout = r_j, rule = 2)$y
-                pos_target[, dimc] <- interp_vals[order(order(tau_j))]  # keep original index order
-        }
-        return (pos_target)
+        # Average positions for nodes that are shared accross branches
+        pos_target[node_count > 0, ] <- pos_accumulator[node_count > 0, ] / node_count[node_count > 0]
+        return(pos_target)
 }
 
 
@@ -2126,6 +2217,10 @@ PrimitiveElasticGraphEmbedment_edit <- function(X,
                                                                                        NodeAgeTargets = target_positions,
                                                                                        eta = eta)
                 } else {
+                        #message("target_positions cpp in:")
+                        #print(target_positions)
+                        #message("NodePositions cpp in:")
+                        #print(NodePositions)
                         NewNodePositions <- distutils::FitGraph2DataGivenPartition_Age(X = X,
                                                                                        PointWeights = PointWeights,
                                                                                        NodePositions = NodePositions,
@@ -2135,6 +2230,15 @@ PrimitiveElasticGraphEmbedment_edit <- function(X,
                                                                                        NodeAgeTargets = target_positions,
                                                                                        eta = eta)
                 }
+                #message("PointWeigths:")
+                #print(PointWeights)
+                #message("Partition:")
+                #print(PartDataStruct$Partition)
+                #message("SpringLaplacianMatrix:")
+                #print(SpringLaplacianMatrix)
+                
+                #message("NewNodePositions cpp out:")
+                #print(NewNodePositions)
                 
                 PartDataStruct <- ElPiGraph.R:::PartitionData(X = X,
                                                               NodePositions = NewNodePositions,
@@ -2494,6 +2598,12 @@ age_vec_toy <- cellsort_toy$cell_metadata$age
 ################################################################################
 X_toy <- apply(X_toy, 2, function(x) (x - mean(x))/sd(x))
 
+corrs <- abs(apply(X_toy, 2, cor, y = age_vec_toy, method = "spearman"))
+
+keep_genes <- names(corrs)[corrs >= quantile(corrs, probs = .65)]
+
+X_toy <- X_toy[, keep_genes]
+
 pca_toy <- prcomp(X_toy, scale. = F, center = F)
 
 cell_info_4pca <- cellsort_toy$cell_metadata
@@ -2503,15 +2613,13 @@ cell_info_4pca$sample <- rownames(cell_info_4pca)
 plotUtils::plotPCA(pca_toy,
                    samp_info = cell_info_4pca,
                    col = "age",
-                   point_size = 1,
-                   x = "PC1",
-                   y = "PC2")
+                   point_size = 1)
 
-plotUtils::doPCAMultiPlot(pca_toy, nComps = 5, samp_info = cell_info_4pca,
+plotUtils::doPCAMultiPlot(pca_toy, nComps = 4, samp_info = cell_info_4pca,
                           col = "age",
                           point_size = 0.5)
 
-tree_toy <- computeElasticPrincipalTree_edit(X_toy[, c(1, 2, 10)],
+tree_toy <- computeElasticPrincipalTree_edit(X_toy,
                                              NumNodes = 25,
                                              Lambda = 0.03, Mu = 0.3,
                                              age_vec = cellsort_toy$cell_metadata$age,
@@ -2519,10 +2627,10 @@ tree_toy <- computeElasticPrincipalTree_edit(X_toy[, c(1, 2, 10)],
                                              eta = 1,
                                              FastSolve = T,
                                              MaxNumberOfIterations = 100,
-                                             n.cores = 8)
+                                             n.cores = 1)
 
 pca_plt <- do_pca_tree(tree_obj = tree_toy[[1]],
-                       dat = X_toy[, c(1, 2, 10)],
+                       dat = X_toy,
                        age_vec = cellsort_toy$cell_metadata$age,
                        node_labels = T,
                        cell_point_size = 2,
@@ -2549,6 +2657,10 @@ cor(cell_pt_toy$pseudotime,
     cellsort_toy$cell_metadata$age,
     method = "spearman")
 
+energy::dcor(cell_pt_toy$pseudotime,
+             cellsort_toy$cell_metadata$age)
+
+??dcor
 
 plot(cell_pt_toy$pseudotime, X_toy[, 1])
 
