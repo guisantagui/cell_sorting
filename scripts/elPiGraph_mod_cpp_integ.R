@@ -49,7 +49,7 @@ library(uwot)
 
 outDir <- "/Users/guillem.santamaria/Documents/postdoc/comput/neurodeg_aging_project/results/cellsort/"
 
-#seur_file <- sprintf("%sGSE254569_ctrls_seur.rds", outDir)
+seur_file <- sprintf("%sGSE254569_ctrls_seur.rds", outDir)
 seur_toy_file <- sprintf("%sseur_synth_one_bifurcation.rds", outDir)
 
 donor_ids_in <- "donor"
@@ -65,7 +65,7 @@ target_cell_toy <- NULL
 
 #seur <- readRDS(seur_file)
 
-seur_toy <- readRDS(seur_toy_file)
+seur_toy <- readRDS(seur_file)
 
 # cellsorter functions (only for normalization purposes, vestigial. Need to be
 # removed)
@@ -164,7 +164,9 @@ get_cell_to_edges_dist <- function(cell, centroids_A, centroids_B) {
 # and assigns the cell to the edge with the minimum distance. Based on the
 # relative position on the edge and the vector of node pseudotimes, interpolates
 # the pseudotime for the cell.
-get_cell_pseudotime <- function(cell_mat, centroid_mat, edges,
+get_cell_pseudotime <- function(cell_mat,
+                                centroid_mat,
+                                edges,
                                 parallelize = F,
                                 cores = NULL,
                                 node_pseudotimes){
@@ -270,6 +272,8 @@ computeElasticPrincipalTree_edit <- function(X,
                                              Mu.Initial = NULL,
                                              age_vec = NULL,
                                              eta = 1e-03,
+                                             gene_weighting = "spearman",
+                                             w_p = 0.5,
                                              ...) {
         
         
@@ -281,56 +285,96 @@ computeElasticPrincipalTree_edit <- function(X,
                 Configuration <- ICOver
         }
         
-        return(
-                computeElasticPrincipalGraphWithGrammars_edit(X = X,
-                                                              NumNodes = NumNodes,
-                                                              NumEdges = NumEdges,
-                                                              InitNodes = InitNodes,
-                                                              Lambda = Lambda,
-                                                              Mu = Mu,
-                                                              GrowGrammars = list(c('bisectedge','addnode2node'),c('bisectedge','addnode2node')),
-                                                              ShrinkGrammars = list(c('shrinkedge','removenode')),
-                                                              MaxNumberOfIterations = MaxNumberOfIterations,
-                                                              TrimmingRadius = TrimmingRadius,
-                                                              eps = eps,
-                                                              Do_PCA = Do_PCA,
-                                                              InitNodePositions = InitNodePositions,
-                                                              InitEdges = InitEdges,
-                                                              AdjustVect = AdjustVect,
-                                                              Configuration = Configuration,
-                                                              CenterData = CenterData,
-                                                              ComputeMSEP = ComputeMSEP,
-                                                              verbose = verbose,
-                                                              ShowTimer = ShowTimer,
-                                                              ReduceDimension = ReduceDimension,
-                                                              drawAccuracyComplexity = drawAccuracyComplexity,
-                                                              drawPCAView = drawPCAView,
-                                                              drawEnergy = drawEnergy,
-                                                              n.cores = n.cores,
-                                                              MinParOP = MinParOP,
-                                                              ClusType = ClusType,
-                                                              nReps = nReps,
-                                                              Subsets = list(),
-                                                              ProbPoint = ProbPoint,
-                                                              Mode = Mode,
-                                                              FinalEnergy = FinalEnergy,
-                                                              alpha = alpha,
-                                                              beta = beta,
-                                                              gamma = gamma,
-                                                              FastSolve = FastSolve,
-                                                              DensityRadius = DensityRadius,
-                                                              AvoidSolitary = AvoidSolitary,
-                                                              EmbPointProb = EmbPointProb,
-                                                              SampleIC = SampleIC,
-                                                              AvoidResampling = AvoidResampling,
-                                                              ParallelRep = ParallelRep,
-                                                              AdjustElasticMatrix = AdjustElasticMatrix,
-                                                              AdjustElasticMatrix.Initial = AdjustElasticMatrix.Initial,
-                                                              Lambda.Initial = Lambda.Initial, Mu.Initial = Mu.Initial,
-                                                              age_vec = age_vec,
-                                                              eta = eta,
-                                                              ...)
-        )
+        if (!gene_weighting %in% c("spearman", "dcor", "none")){
+                stop("gene_weighting has to be 'spearman', 'dcor' or 'none'",
+                     call. = F)
+        }else if (gene_weighting == "spearman"){
+                message("Weighting genes with Spearman correlation...")
+                gene_weights <- abs(apply(X,
+                                          2,
+                                          cor,
+                                          y = age_vec,
+                                          method = "spearman",
+                                          use = "complete.obs"))
+        }else if (gene_weighting == "dcor"){
+                message("Weighting genes with distance correlation...")
+                gene_weights <- abs(apply(X,
+                                          2,
+                                          energy::dcor,
+                                          y = age_vec))
+        }else if (gene_weighting == "none"){
+                gene_weights <- rep(1, ncol(X))
+        }
+        
+        
+        gene_weights <- gene_weights / max(gene_weights)
+        gene_weights <- pmax(gene_weights, 1e-3)
+        gene_weights <- gene_weights^w_p
+        X <- sweep(X, 2, gene_weights, `*`)
+        out <- computeElasticPrincipalGraphWithGrammars_edit(X = X,
+                                                             NumNodes = NumNodes,
+                                                             NumEdges = NumEdges,
+                                                             InitNodes = InitNodes,
+                                                             Lambda = Lambda,
+                                                             Mu = Mu,
+                                                             GrowGrammars = list(c('bisectedge','addnode2node'),c('bisectedge','addnode2node')),
+                                                             ShrinkGrammars = list(c('shrinkedge','removenode')),
+                                                             MaxNumberOfIterations = MaxNumberOfIterations,
+                                                             TrimmingRadius = TrimmingRadius,
+                                                             eps = eps,
+                                                             Do_PCA = Do_PCA,
+                                                             InitNodePositions = InitNodePositions,
+                                                             InitEdges = InitEdges,
+                                                             AdjustVect = AdjustVect,
+                                                             Configuration = Configuration,
+                                                             CenterData = CenterData,
+                                                             ComputeMSEP = ComputeMSEP,
+                                                             verbose = verbose,
+                                                             ShowTimer = ShowTimer,
+                                                             ReduceDimension = ReduceDimension,
+                                                             drawAccuracyComplexity = drawAccuracyComplexity,
+                                                             drawPCAView = drawPCAView,
+                                                             drawEnergy = drawEnergy,
+                                                             n.cores = n.cores,
+                                                             MinParOP = MinParOP,
+                                                             ClusType = ClusType,
+                                                             nReps = nReps,
+                                                             Subsets = list(),
+                                                             ProbPoint = ProbPoint,
+                                                             Mode = Mode,
+                                                             FinalEnergy = FinalEnergy,
+                                                             alpha = alpha,
+                                                             beta = beta,
+                                                             gamma = gamma,
+                                                             FastSolve = FastSolve,
+                                                             DensityRadius = DensityRadius,
+                                                             AvoidSolitary = AvoidSolitary,
+                                                             EmbPointProb = EmbPointProb,
+                                                             SampleIC = SampleIC,
+                                                             AvoidResampling = AvoidResampling,
+                                                             ParallelRep = ParallelRep,
+                                                             AdjustElasticMatrix = AdjustElasticMatrix,
+                                                             AdjustElasticMatrix.Initial = AdjustElasticMatrix.Initial,
+                                                             Lambda.Initial = Lambda.Initial, Mu.Initial = Mu.Initial,
+                                                             age_vec = age_vec,
+                                                             eta = eta,
+                                                             ...)
+        for (i in seq_along(out)){
+                out[[i]]$NodePositions <- sweep(out[[i]]$NodePositions,
+                                                2,
+                                                gene_weights, `/`)
+                out[[i]]$g <- get_node_graph(out[[i]]$NodePositions,
+                                             out[[1]]$ElasticMatrix)
+                out[[i]]$age_tau$pseudotime <- c()
+                root <- get_root(out[[i]]$g,
+                                 out[[i]]$age_tau$average_age)
+                
+                # Obtain final pseudotimes
+                out[[i]]$age_tau$pseudotime <- get_node_pseudotime(out[[i]]$NodePositions,
+                                                                   out[[i]]$g,
+                                                                   root)
+        }
+        return(out)
         
 }
 
@@ -2566,8 +2610,10 @@ do_pca_tree <- function(tree_obj,
 # Create input matrices
 ################################################################################
 
-#cellsort <- create_cellsort_obj(seur = seur, cell_ids_in = cell_ids_in, target_cell = target_cell, n_var_features = 5000)
+cellsort <- create_cellsort_obj(seur = seur_toy, cell_ids_in = cell_ids_in, target_cell = target_cell, n_var_features = 500)
 cellsort_toy <- create_cellsort_obj(seur = seur_toy, cell_ids_in = cell_ids_in_toy, target_cell = target_cell_toy, shiftlog = F)
+
+cellsort_toy <- cellsort
 
 #start_time <- Sys.time()
 #x_pca <- irlba::prcomp_irlba(Matrix::t(cellsort$cell_expr),
@@ -2592,17 +2638,20 @@ n_comps_agecor <- 20
 X_toy <- as.matrix(Matrix::t(cellsort_toy$cell_expr))
 age_vec_toy <- cellsort_toy$cell_metadata$age
 
+colnames(X_toy)
 
-
+colnames(X_toy)
 # Do the tree
 ################################################################################
 X_toy <- apply(X_toy, 2, function(x) (x - mean(x))/sd(x))
 
 corrs <- abs(apply(X_toy, 2, cor, y = age_vec_toy, method = "spearman"))
 
-keep_genes <- names(corrs)[corrs >= quantile(corrs, probs = .65)]
+head(sort(corrs, decreasing = T), 100)
 
-X_toy <- X_toy[, keep_genes]
+#keep_genes <- names(corrs)[corrs >= quantile(corrs, probs = .65)]
+
+#X_toy <- X_toy[, keep_genes]
 
 pca_toy <- prcomp(X_toy, scale. = F, center = F)
 
@@ -2620,14 +2669,16 @@ plotUtils::doPCAMultiPlot(pca_toy, nComps = 4, samp_info = cell_info_4pca,
                           point_size = 0.5)
 
 tree_toy <- computeElasticPrincipalTree_edit(X_toy,
-                                             NumNodes = 25,
-                                             Lambda = 0.03, Mu = 0.3,
+                                             NumNodes = 40,
+                                             Lambda = 0.01, Mu = 0.1,
                                              age_vec = cellsort_toy$cell_metadata$age,
                                              Do_PCA = F,
-                                             eta = 1,
+                                             eta = .5,
                                              FastSolve = T,
                                              MaxNumberOfIterations = 100,
-                                             n.cores = 1)
+                                             n.cores = 8,
+                                             gene_weighting = "spearman",
+                                             w_p = 1)
 
 pca_plt <- do_pca_tree(tree_obj = tree_toy[[1]],
                        dat = X_toy,
@@ -2651,18 +2702,98 @@ cell_pt_toy <- get_cell_pseudotime(X_toy, tree_toy[[1]]$NodePositions,
                                    as_edgelist(tree_toy[[1]]$g),
                                    node_pseudotimes = tree_toy[[1]]$age_tau$pseudotime)
 
+
+
 plot(x = cell_pt_toy$pseudotime, cellsort_toy$cell_metadata$age)
 
 cor(cell_pt_toy$pseudotime,
     cellsort_toy$cell_metadata$age,
     method = "spearman")
 
-energy::dcor(cell_pt_toy$pseudotime,
-             cellsort_toy$cell_metadata$age)
+#energy::dcor(cell_pt_toy$pseudotime,
+#             cellsort_toy$cell_metadata$age)
 
-??dcor
 
-plot(cell_pt_toy$pseudotime, X_toy[, 1])
+plot(cell_pt_toy$pseudotime, X_toy[, 2])
+
+
+# Obtain the expression and psedotimes per branch in the resulting tree
+get_trajectories_per_branch <- function(X, tree_obj){
+        branches <- identify_branches(tree_obj$g,
+                                      tree_obj$age_tau$average_age)
+        cell_pt <- get_cell_pseudotime(X, tree_obj$NodePositions,
+                                       as_edgelist(tree_obj$g),
+                                       node_pseudotimes = tree_obj$age_tau$pseudotime)
+        rownames(cell_pt) <- rownames(X)
+        out <- list()
+        for (branch in branches) {
+                branch_pts_ordered <- list()
+                X_branch_ordered <- list()
+                for (i in 1:(length(branch) - 1)){
+                        from <- branch[i]
+                        to <- branch[i + 1]
+                        # Edges are undirected, so let's keep just the cells that fall between the nodes
+                        cell_pt_branch <- cell_pt[cell_pt$from == from & cell_pt$to == to | cell_pt$from == to & cell_pt$to == from, ]
+                        cell_pt_branch <- cell_pt_branch[order(cell_pt_branch$pseudotime), ]
+                        branch_pts_ordered[[i]] <- cell_pt_branch
+                        X_branch_ordered[[i]] <- X[match(rownames(cell_pt_branch),
+                                                         rownames(X)), ]
+                }
+                branch_pts_ordered <- do.call(rbind, branch_pts_ordered)
+                X_branch_ordered <- do.call(rbind, X_branch_ordered)
+                branch_name <- sprintf("N%s_to_N%s",
+                                       branch[1],
+                                       branch[length(branch)])
+                ord_obj <- list(pseudotime = branch_pts_ordered,
+                                expression = X_branch_ordered)
+                #branch_name <- make.names(paste(branch, collapse = "_"))
+                
+                out[[branch_name]] <- ord_obj
+        }
+        return(out)
+}
+
+traj_per_branch_toy <- get_trajectories_per_branch(X_toy, tree_obj = tree_toy[[1]])
+
+plot_gene_branches <- function(branch_trajs_obj, gene){
+        #branch_trajs_obj <- traj_per_branch_toy
+        #gene <- "G2"
+        plot_df <- list()
+        for(i in seq_along(branch_trajs_obj)){
+                branch_df <- data.frame(pseudotime = branch_trajs_obj[[i]]$pseudotime$pseudotime,
+                                        expression = branch_trajs_obj[[i]]$expression[, gene],
+                                        branch = names(branch_trajs_obj)[i])
+                plot_df[[i]] <- branch_df
+        }
+        plot_df <- do.call(rbind, plot_df)
+        plt <- ggplot(plot_df, mapping = aes(x = pseudotime, y = expression)) + 
+                geom_point() +
+                ggtitle(gene) +
+                geom_smooth(aes(color = branch),
+                            method = "loess",
+                            span = 1) +
+                theme(axis.text.y = element_text(size=15),
+                      axis.text.x = element_text(size=15),
+                      panel.background = element_blank(),
+                      panel.grid.major = element_line(colour = "gray"), 
+                      panel.grid.minor = element_blank(),
+                      axis.line = element_line(colour = "black"),
+                      axis.line.y = element_line(colour = "black"),
+                      panel.border = element_rect(colour = "black",
+                                                  fill=NA, size=1))
+        return(plt)
+}
+
+plot_gene_branches(traj_per_branch_toy, "G2")
+plot_gene_branches(traj_per_branch_toy, "G1")
+
+plot_gene_branches(traj_per_branch_toy, "G10")
+
+plot(traj_per_branch_toy$X1_23_6_10_16_25_21_27_18_2_4_20_7_9_22_17_3$pseudotime$pseudotime,
+     traj_per_branch_toy$X1_23_6_10_16_25_21_27_18_2_4_20_7_9_22_17_3$expression[, 2])
+
+plot(traj_per_branch_toy$X1_23_6_10_16_25_21_27_18_2_4_20_7_9_22_17_3$pseudotime$pseudotime,
+     traj_per_branch_toy$X1_23_6_10_16_25_21_27_18_2_4_20_7_9_22_17_3$expression[, 1])
 
 # Bayesian optimizations for the elastic tree parameters
 ################################################################################
